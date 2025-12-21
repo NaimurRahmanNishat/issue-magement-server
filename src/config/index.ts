@@ -25,7 +25,7 @@ interface Config {
 
 const config = {
     port: Number(process.env.PORT) || 5000,
-    nodeEnv: process.env.NODE_ENV || 'development',
+    nodeEnv: process.env.NODE_ENV || "development",
     client_url: process.env.CLIENT_URL || "",
     database_url: process.env.MONGODB_URL || "",
     redis_url : process.env.REDIS_URL || "",
