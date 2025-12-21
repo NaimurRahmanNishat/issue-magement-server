@@ -1,0 +1,57 @@
+
+backend/
+├── src/
+│   ├── config/
+│   │   ├── cacheConfig.ts
+│   │   ├── db.ts
+│   │   ├── index.ts
+│   │   ├── redis.ts
+│   │   └── socket.ts
+│   │
+│   ├── middlewares/
+│   │   ├── auth.middleware.ts
+│   │   ├── cacheAsync.ts
+│   │   └── globalError.ts
+|   |  
+│   ├── modules/  
+│   │   ├── category/
+│   │   │   └── category.model.ts
+│   │   │
+│   │   ├── comment/
+│   │   │   ├── review.controller.ts
+│   │   │   ├── review.model.ts
+│   │   │   └── review.routes.ts
+│   │   │
+│   │   ├── emergency/
+│   │   │   ├── emergencyMessage.controller.ts
+│   │   │   ├── emergencyMessage.model.ts
+│   │   │   └── emergencyMessage.routes.ts
+│   │   │
+│   │   ├── issue/
+│   │   │   ├── issue.controller.ts
+│   │   │   ├── issue.model.ts
+│   │   │   └── issue.routes.ts
+│   │   │
+│   │   ├── stats/
+│   │   │   ├──stats.controller.ts     (It is mainly used for user dashboard, category-admin dashboard & super-admin dashboard.)
+│   │   │   └── stats.routes.ts    (It is mainly used for user dashboard, category-admin dashboard and super-admin dashboard.)
+│   │   │
+│   │   └── user/
+│   │       ├── user.controller.ts
+│   │       ├── user.model.ts
+│   │       ├── user.routes.ts
+│   │       └── user.validation.ts
+│   │
+│   ├── templates/
+│   │   
+│   ├── utils/
+│   │   ├── AppError.ts
+│   │   ├── cache.ts
+│   │   ├── cookie.ts
+│   │   ├── email.ts
+│   │   ├── token.ts
+│   │   └── UploadImage.ts
+│   │   
+│   ├── app.ts
+│   └── server.ts
+└── package.json
