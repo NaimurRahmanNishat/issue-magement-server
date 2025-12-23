@@ -1,5 +1,5 @@
 // src/modules/users/user.model.ts
-// note: nidPic এর ফ্রন্ট সাইড এন্ড ব্যাক সাইড এর ইমেজ আপলোড হবে 
+// note: nidPic is an array of { public_id: string, url: string }
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
 

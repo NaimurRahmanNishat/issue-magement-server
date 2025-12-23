@@ -21,11 +21,12 @@ interface Config {
     cloudinary_cloud_name: string;
     cloudinary_api_key: string;
     cloudinary_api_secret: string;
+    socket_token_secret?: string;
 }
 
 const config = {
     port: Number(process.env.PORT) || 5000,
-    nodeEnv: process.env.NODE_ENV || "development",
+    nodeEnv: process.env.NODE_ENV || 'development',
     client_url: process.env.CLIENT_URL || "",
     database_url: process.env.MONGODB_URL || "",
     redis_url : process.env.REDIS_URL || "",
@@ -42,6 +43,7 @@ const config = {
     cloudinary_cloud_name: process.env.CLOUDINARY_CLOUD_NAME || "",
     cloudinary_api_key: process.env.CLOUDINARY_API_KEY || "",
     cloudinary_api_secret: process.env.CLOUDINARY_API_SECRET || "",
+    socket_token_secret: process.env.SOCKET_TOKEN_SECRET || "",
 };
 
 export default config;

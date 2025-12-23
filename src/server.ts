@@ -1,4 +1,3 @@
-import mongoose from "mongoose";
 import app from "./app";
 import config from "./config";
 import dbConnect from "./config/db";
@@ -15,10 +14,6 @@ async function main() {
     // Socket.io Initialize
     initSocket(server);
     });
-
-  // Initialize Socket.IO
-    initSocket(server);
-    console.log("🔌 Socket.IO initialized and ready");
 
   } catch (error) {
     console.error("❌ Failed to start server:", error);

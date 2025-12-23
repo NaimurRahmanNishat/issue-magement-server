@@ -22,11 +22,12 @@ export const setAuthCookies = (res:Response, accessToken: string, refreshToken: 
 }
 
 
-export const setAccessTokenCookie = ( res: Response, accessToken: string ) => {
+export const setAccessTokenCookie = (res: Response, accessToken: string) => {
   res.cookie("accessToken", accessToken, {
     httpOnly: true,
     secure: isProduction,
     sameSite: isProduction ? "none" : "lax",
-    maxAge: 10 * 60 * 1000, // 10 minute
+    maxAge: 10 * 60 * 1000,
+    path: "/",
   });
 };

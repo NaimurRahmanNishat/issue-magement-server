@@ -228,78 +228,62 @@ export const login = catchAsync(async (req: Request, res: Response) => {
 
 // 4. refresh token complexity o(1)
 export const refreshToken = catchAsync(async (req: Request, res: Response) => {
-  const body = sanitizeBody(req.body);
-  const userId = body.userId;
+  const oldRefreshToken = req.cookies?.refreshToken;
 
-  if (!userId) {
-    throw new AppError(401, "User ID is required!");
+  if (!oldRefreshToken) {
+    throw new AppError(401, "Refresh token missing");
   }
 
-  // Database from user and refresh token fetch
-  const user = await User.findById(userId).select(
+  let decoded: any;
+  try {
+    decoded = verifyRefreshToken(oldRefreshToken);
+  } catch {
+    throw new AppError(401, "Invalid refresh token");
+  }
+
+  const user = await User.findById(decoded.id).select(
     "+refreshToken +refreshTokenExpiry"
   );
 
-    if (!user || !user.refreshToken || !user.refreshTokenExpiry) {
-    throw new AppError(401, "No refresh token found. Please login again.");
+  if (
+    !user ||
+    user.refreshToken !== oldRefreshToken ||
+    !user.refreshTokenExpiry
+  ) {
+    throw new AppError(401, "Invalid refresh token");
   }
 
-  // Check if refresh token expired
   if (new Date() > user.refreshTokenExpiry) {
-    // Expired token clear
     user.refreshToken = null;
     user.refreshTokenExpiry = null;
     await user.save();
-    throw new AppError(401, "Refresh token expired. Please login again.");
+    throw new AppError(401, "Refresh token expired");
   }
 
-  // Verify refresh token
-  try {
-    const decoded = verifyRefreshToken(user.refreshToken) as {
-      id: string;
-      role: string;
-    };
-
-    // Security check: decoded id must match userId
-    if (decoded.id !== userId) {
-      throw new AppError(401, "Invalid token");
-    }
-
-    // Generate new access token
-    const accessToken = generateAccessToken({ id: user._id, role: user.role });
-
-    // Update access token cookie
-    setAccessTokenCookie(res, accessToken);
-
-    // Response 
-    const safeUser = {
-    _id: user._id!.toString(),
-    name: user.name,
-    email: user.email,
+  // 🔁 ROTATE refresh token
+  const newRefreshToken = generateRefreshToken({
+    id: user._id,
     role: user.role,
-    category: user.category,
-    isVerified: user.isVerified,
-    phone: user.phone,
-    zipCode: user.zipCode,
-    profession: user.profession,
-    division: user.division,
-    nidPic: user.nidPic,
-    avatar: user.avatar
-    };
+  });
 
-    // Update cache
-    await setCache(`user:${user._id}`, safeUser, USER_CACHE_TTL);
+  const newExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
-    res.status(200).json({
-      success: true,
-      message: "Access token refreshed successfully!",
-      data: safeUser,
-    });
-  } catch (error) {
-    // Invalid token - clear from database
-    await User.updateOne({ _id: userId },{ $set: { refreshToken: null, refreshTokenExpiry: null } });
-    throw new AppError(401, "Invalid refresh token. Please login again.");
-  }
+  user.refreshToken = newRefreshToken;
+  user.refreshTokenExpiry = newExpiry;
+  await user.save();
+
+  const newAccessToken = generateAccessToken({
+    id: user._id,
+    role: user.role,
+  });
+
+  // overwrite cookies
+  setAuthCookies(res, newAccessToken, newRefreshToken);
+
+  res.status(200).json({
+    success: true,
+    message: "Token refreshed",
+  });
 });
 
 
@@ -698,15 +682,14 @@ export const deleteCategoryAdminRole = catchAsync(async (req: AuthRequest, res: 
 
 // 14. Get socket token
 export const getSocketToken = catchAsync(async (req: AuthRequest, res: Response) => {
-  const user = req.user!;
+  const user = req.user;
   if (!user) {
     return res.status(401).json({
       success: false,
-      message: "Unauthorized: User not authenticated",
+      message: "Unauthorized",
     });
   }
 
-  // Generate Socket Token
   const socketToken = jwt.sign(
     {
       id: user._id,
@@ -714,18 +697,13 @@ export const getSocketToken = catchAsync(async (req: AuthRequest, res: Response)
       category: user.category,
       email: user.email,
     },
-    process.env.SOCKET_TOKEN_SECRET || process.env.REFRESH_TOKEN_SECRET!,
-    {
-      expiresIn: "24h", // Token valid for 24 hours
-    }
+    config.socket_token_secret!,
+    { expiresIn: "10m" }
   );
 
   res.status(200).json({
     success: true,
-    data: {
-      socketToken,
-    },
-    message: "Socket token generated successfully",
+    data: { socketToken },
   });
 });
 
