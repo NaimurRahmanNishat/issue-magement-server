@@ -17,9 +17,6 @@ async function main() {
             // Socket.io Initialize
             (0, socket_1.initSocket)(server);
         });
-        // Initialize Socket.IO
-        (0, socket_1.initSocket)(server);
-        console.log("🔌 Socket.IO initialized and ready");
     }
     catch (error) {
         console.error("❌ Failed to start server:", error);

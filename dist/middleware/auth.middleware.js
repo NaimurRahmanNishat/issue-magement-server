@@ -11,7 +11,7 @@ const errorHandler_1 = require("../utils/errorHandler");
 const cache_1 = require("../utils/cache");
 // Authentication middleware
 const isAuthenticated = async (req, res, next) => {
-    const token = req.cookies.accessToken;
+    const token = req.cookies?.accessToken;
     if (!token)
         return next(new errorHandler_1.AppError(401, "Access token missing"));
     let decoded;

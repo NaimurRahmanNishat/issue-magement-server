@@ -26,7 +26,8 @@ const setAccessTokenCookie = (res, accessToken) => {
         httpOnly: true,
         secure: isProduction,
         sameSite: isProduction ? "none" : "lax",
-        maxAge: 10 * 60 * 1000, // 10 minute
+        maxAge: 10 * 60 * 1000,
+        path: "/",
     });
 };
 exports.setAccessTokenCookie = setAccessTokenCookie;

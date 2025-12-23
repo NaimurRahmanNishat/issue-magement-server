@@ -5,7 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.nidRegex = exports.phoneRegex = exports.emailRegex = void 0;
 // src/modules/users/user.model.ts
-// note: nidPic এর ফ্রন্ট সাইড এন্ড ব্যাক সাইড এর ইমেজ আপলোড হবে 
+// note: nidPic is an array of { public_id: string, url: string }
 const mongoose_1 = __importDefault(require("mongoose"));
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
 exports.emailRegex = /^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$/;
