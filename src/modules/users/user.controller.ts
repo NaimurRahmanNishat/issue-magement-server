@@ -8,7 +8,7 @@ import bcrypt from "bcryptjs";
 import { AuthRequest } from "../../middleware/auth.middleware";
 import crypto from "crypto";
 import { sendActivationEmail } from "../../utils/email";
-import config from "../../config";
+import config from "../../config"; 
 import { redis } from "../../config/redis";
 import { generateAccessToken, generateRefreshToken, updateRefreshToken, verifyRefreshToken } from "../../utils/token";
 import { getCache, invalidateCache, invalidateCacheAsync, setCache } from "../../utils/cache";
@@ -228,62 +228,78 @@ export const login = catchAsync(async (req: Request, res: Response) => {
 
 // 4. refresh token complexity o(1)
 export const refreshToken = catchAsync(async (req: Request, res: Response) => {
-  const oldRefreshToken = req.cookies?.refreshToken;
+  const body = sanitizeBody(req.body);
+  const userId = body.userId; // Frontend from userId send
 
-  if (!oldRefreshToken) {
-    throw new AppError(401, "Refresh token missing");
+  if (!userId) {
+    throw new AppError(401, "User ID is required!");
   }
 
-  let decoded: any;
-  try {
-    decoded = verifyRefreshToken(oldRefreshToken);
-  } catch {
-    throw new AppError(401, "Invalid refresh token");
-  }
-
-  const user = await User.findById(decoded.id).select(
+  // Database from user and refresh token fetch
+  const user = await User.findById(userId).select(
     "+refreshToken +refreshTokenExpiry"
   );
 
-  if (
-    !user ||
-    user.refreshToken !== oldRefreshToken ||
-    !user.refreshTokenExpiry
-  ) {
-    throw new AppError(401, "Invalid refresh token");
+    if (!user || !user.refreshToken || !user.refreshTokenExpiry) {
+    throw new AppError(401, "No refresh token found. Please login again.");
   }
 
+  // Check if refresh token expired
   if (new Date() > user.refreshTokenExpiry) {
+    // Expired token clear
     user.refreshToken = null;
     user.refreshTokenExpiry = null;
     await user.save();
-    throw new AppError(401, "Refresh token expired");
+    throw new AppError(401, "Refresh token expired. Please login again.");
   }
 
-  // 🔁 ROTATE refresh token
-  const newRefreshToken = generateRefreshToken({
-    id: user._id,
+  // Verify refresh token
+  try {
+    const decoded = verifyRefreshToken(user.refreshToken) as {
+      id: string;
+      role: string;
+    };
+
+    // Security check: decoded id must match userId
+    if (decoded.id !== userId) {
+      throw new AppError(401, "Invalid token");
+    }
+
+    // Generate new access token
+    const accessToken = generateAccessToken({ id: user._id, role: user.role });
+
+    // Update access token cookie
+    setAccessTokenCookie(res, accessToken);
+
+    // Response 
+    const safeUser = {
+    _id: user._id!.toString(),
+    name: user.name,
+    email: user.email,
     role: user.role,
-  });
+    category: user.category,
+    isVerified: user.isVerified,
+    phone: user.phone,
+    zipCode: user.zipCode,
+    profession: user.profession,
+    division: user.division,
+    nidPic: user.nidPic,
+    avatar: user.avatar
+    };
 
-  const newExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    // Update cache
+    await setCache(`user:${user._id}`, safeUser, USER_CACHE_TTL);
 
-  user.refreshToken = newRefreshToken;
-  user.refreshTokenExpiry = newExpiry;
-  await user.save();
-
-  const newAccessToken = generateAccessToken({
-    id: user._id,
-    role: user.role,
-  });
-
-  // overwrite cookies
-  setAuthCookies(res, newAccessToken, newRefreshToken);
-
-  res.status(200).json({
-    success: true,
-    message: "Token refreshed",
-  });
+    res.status(200).json({
+      success: true,
+      message: "Access token refreshed successfully!",
+      data: safeUser,
+    });
+  } catch (error) {
+    // Invalid token - clear from database
+    await User.updateOne({ _id: userId },{ $set: { refreshToken: null, refreshTokenExpiry: null } });
+    throw new AppError(401, "Invalid refresh token. Please login again.");
+  }
 });
 
 
@@ -681,15 +697,16 @@ export const deleteCategoryAdminRole = catchAsync(async (req: AuthRequest, res: 
 
 
 // 14. Get socket token
-export const getSocketToken = catchAsync(async (req: AuthRequest, res: Response) => {
-  const user = req.user;
+export const getSocketToken = catchAsync(async (req: Request, res: Response) => {
+  const user = (req as any).user!;
   if (!user) {
     return res.status(401).json({
       success: false,
-      message: "Unauthorized",
+      message: "Unauthorized: User not authenticated",
     });
   }
 
+  // Generate Socket Token
   const socketToken = jwt.sign(
     {
       id: user._id,
@@ -697,13 +714,18 @@ export const getSocketToken = catchAsync(async (req: AuthRequest, res: Response)
       category: user.category,
       email: user.email,
     },
-    config.socket_token_secret!,
-    { expiresIn: "10m" }
+    process.env.SOCKET_TOKEN_SECRET || process.env.REFRESH_TOKEN_SECRET!,
+    {
+      expiresIn: "24h", // Token valid for 24 hours
+    }
   );
 
   res.status(200).json({
     success: true,
-    data: { socketToken },
+    data: {
+      socketToken,
+    },
+    message: "Socket token generated successfully",
   });
 });
 

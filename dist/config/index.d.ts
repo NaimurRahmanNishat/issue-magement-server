@@ -17,7 +17,6 @@ declare const config: {
     cloudinary_cloud_name: string;
     cloudinary_api_key: string;
     cloudinary_api_secret: string;
-    socket_token_secret: string;
 };
 export default config;
 //# sourceMappingURL=index.d.ts.map

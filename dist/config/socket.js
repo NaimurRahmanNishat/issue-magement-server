@@ -7,76 +7,190 @@ exports.broadcastToAll = exports.emitToSuperAdmin = exports.emitToUser = exports
 const socket_io_1 = require("socket.io");
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const _1 = __importDefault(require("."));
-let io;
-// Init Socket
+let io = null;
+// ============================================
+// Socket.IO Initialization
+// ============================================
 const initSocket = (server) => {
-    if (io)
+    if (io) {
+        console.log("⚠️ Socket.IO already initialized, returning existing instance");
         return io;
+    }
+    // Create Socket.IO Server
     io = new socket_io_1.Server(server, {
         cors: {
-            origin: _1.default.client_url || "http://localhost:5173",
+            origin: _1.default.client_url || ["http://localhost:5173"],
             credentials: true,
+            methods: ["GET", "POST"],
         },
-        transports: ["websocket"],
-        pingTimeout: 60000,
+        // Performance & Connection Settings
+        pingTimeout: 60000, // 60 seconds
+        pingInterval: 25000, // 25 seconds
+        maxHttpBufferSize: 1e6, // 1MB
+        transports: ["websocket", "polling"],
     });
-    // Auth Middleware
+    // ============================================
+    // Authentication Middleware
+    // ============================================
     io.use((socket, next) => {
+        const token = socket.handshake?.auth?.token;
+        if (!token) {
+            console.warn(`❌ Socket connection rejected (no token): ${socket.id}`);
+            return next(new Error("Authentication required"));
+        }
         try {
-            const token = socket.handshake.auth?.token;
-            if (!token)
-                throw new Error("No token");
-            const user = jsonwebtoken_1.default.verify(token, process.env.SOCKET_TOKEN_SECRET);
-            socket.data.user = user;
-            next();
+            // Verify JWT Token
+            const decoded = jsonwebtoken_1.default.verify(token, process.env.SOCKET_TOKEN_SECRET || process.env.REFRESH_TOKEN_SECRET);
+            // Validate user data
+            if (!decoded.id || !decoded.role) {
+                console.warn(`❌ Invalid token payload: ${socket.id}`);
+                return next(new Error("Invalid token payload"));
+            }
+            // Attach user data to socket
+            socket.data.user = decoded;
+            return next();
         }
-        catch {
-            next(new Error("Authentication failed"));
+        catch (err) {
+            console.error(`❌ Socket auth failed: ${socket.id}`, err.message);
+            return next(new Error("Invalid or expired token"));
         }
     });
-    // Connection
+    // ============================================
+    // Connection Handler
+    // ============================================
     io.on("connection", (socket) => {
-        const user = socket.data.user;
-        console.log(`${socket.id} | ${user.role}`);
-        // auto Rooms join
+        const authSocket = socket;
+        const user = authSocket.data.user;
+        // Safety check
+        if (!user || !user.id) {
+            console.warn(`❌ Unauthenticated socket connected: ${socket.id}`);
+            socket.disconnect(true);
+            return;
+        }
+        console.log(`✅ Socket connected: ${socket.id} | User: ${user.id} | Role: ${user.role}`);
+        // ============================================
+        // Role-Based Room Assignment
+        // ============================================
+        // 1. Category Admin Room
         if (user.role === "category-admin" && user.category) {
-            join(socket, `admin:${user.category}`);
+            const adminRoom = `admin:${user.category}`;
+            socket.join(adminRoom);
+            console.log(`👨‍💼 Admin ${user.id} joined room: ${adminRoom}`);
+            // Send confirmation to client
+            socket.emit("roomJoined", {
+                success: true,
+                room: adminRoom,
+                message: `Joined ${user.category} admin room`,
+            });
         }
+        // 2. User Personal Room
         if (user.role === "user") {
-            join(socket, `user:${user.id}`);
+            const userRoom = `user:${user.id}`;
+            socket.join(userRoom);
+            console.log(`👤 User ${user.id} joined personal room: ${userRoom}`);
+            socket.emit("roomJoined", {
+                success: true,
+                room: userRoom,
+                message: "Joined personal room",
+            });
         }
+        // 3. Super Admin Room (optional)
         if (user.role === "super-admin") {
-            join(socket, "admin:super");
+            socket.join("admin:super");
+            console.log(`🔑 Super Admin ${user.id} joined super admin room`);
+            socket.emit("roomJoined", {
+                success: true,
+                room: "admin:super",
+                message: "Joined super admin room",
+            });
         }
-        // Base Events
-        socket.on("ping", () => socket.emit("pong", { timestamp: Date.now() }));
-        socket.on("joinRoom", (room) => join(socket, room));
-        socket.on("leaveRoom", (room) => socket.leave(room));
-        socket.on("disconnect", (r) => console.log(`${socket.id} disconnected: ${r}`));
+        // ============================================
+        // Event Handlers
+        // ============================================
+        // Test event (for debugging)
+        socket.on("ping", () => {
+            socket.emit("pong", { timestamp: Date.now() });
+        });
+        // Custom event example
+        socket.on("joinRoom", (roomName) => {
+            if (roomName && typeof roomName === "string") {
+                socket.join(roomName);
+                console.log(`📥 ${user.id} manually joined room: ${roomName}`);
+                socket.emit("roomJoined", { success: true, room: roomName });
+            }
+        });
+        socket.on("leaveRoom", (roomName) => {
+            if (roomName && typeof roomName === "string") {
+                socket.leave(roomName);
+                console.log(`📤 ${user.id} left room: ${roomName}`);
+            }
+        });
+        // ============================================
+        // Disconnect Handler
+        // ============================================
+        socket.on("disconnect", (reason) => {
+            console.log(`❌ Socket disconnected: ${socket.id} | User: ${user.id} | Reason: ${reason}`);
+        });
+        // ============================================
+        // Error Handler
+        // ============================================
+        socket.on("error", (error) => {
+            console.error(`⚠️ Socket error for ${socket.id}:`, error);
+        });
     });
-    console.log("🔌 Socket initialized");
+    console.log("🔌 Socket.IO initialized successfully");
     return io;
 };
 exports.initSocket = initSocket;
-// Helpers
-const join = (socket, room) => {
-    socket.join(room);
-    socket.emit("roomJoined", { success: true, room });
-};
-// Get IO Instance
+// ============================================
+// Get Socket.IO Instance
+// ============================================
 const getIO = () => {
-    if (!io)
-        throw new Error("Socket not initialized");
+    if (!io) {
+        throw new Error("❌ Socket.IO not initialized. Call initSocket(server) first.");
+    }
     return io;
 };
 exports.getIO = getIO;
-// Emit Helpers
-const emitToCategoryAdmin = (category, event, data) => (0, exports.getIO)().to(`admin:${category}`).emit(event, data);
+// ============================================
+// Utility Functions
+// ============================================
+/*
+ * Emit event to specific category admin room
+ */
+const emitToCategoryAdmin = (category, event, data) => {
+    const io = (0, exports.getIO)();
+    const room = `admin:${category}`;
+    io.to(room).emit(event, data);
+    console.log(`📢 Emitted '${event}' to room: ${room}`);
+};
 exports.emitToCategoryAdmin = emitToCategoryAdmin;
-const emitToUser = (userId, event, data) => (0, exports.getIO)().to(`user:${userId}`).emit(event, data);
+/**
+ * Emit event to specific user
+ */
+const emitToUser = (userId, event, data) => {
+    const io = (0, exports.getIO)();
+    const room = `user:${userId}`;
+    io.to(room).emit(event, data);
+    console.log(`📢 Emitted '${event}' to user: ${userId}`);
+};
 exports.emitToUser = emitToUser;
-const emitToSuperAdmin = (event, data) => (0, exports.getIO)().to("admin:super").emit(event, data);
+/**
+ * Emit event to all super admins
+ */
+const emitToSuperAdmin = (event, data) => {
+    const io = (0, exports.getIO)();
+    io.to("admin:super").emit(event, data);
+    console.log(`📢 Emitted '${event}' to super admins`);
+};
 exports.emitToSuperAdmin = emitToSuperAdmin;
-const broadcastToAll = (event, data) => (0, exports.getIO)().emit(event, data);
+/**
+ * Broadcast to all connected clients
+ */
+const broadcastToAll = (event, data) => {
+    const io = (0, exports.getIO)();
+    io.emit(event, data);
+    console.log(`📢 Broadcasted '${event}' to all clients`);
+};
 exports.broadcastToAll = broadcastToAll;
 //# sourceMappingURL=socket.js.map

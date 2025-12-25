@@ -17,7 +17,7 @@ const setCookie = (res, name, token, maxAge) => {
     res.cookie(name, token, cookieOptions);
 };
 const setAuthCookies = (res, accessToken, refreshToken) => {
-    setCookie(res, "accessToken", accessToken, 10 * 60 * 1000); // 10 minute
+    setCookie(res, "accessToken", accessToken, 1 * 60 * 1000); // 10 minute
     setCookie(res, "refreshToken", refreshToken, 7 * 24 * 60 * 60 * 1000); // 7 days
 };
 exports.setAuthCookies = setAuthCookies;
@@ -26,8 +26,7 @@ const setAccessTokenCookie = (res, accessToken) => {
         httpOnly: true,
         secure: isProduction,
         sameSite: isProduction ? "none" : "lax",
-        maxAge: 10 * 60 * 1000,
-        path: "/",
+        maxAge: 1 * 60 * 1000, // 10 minute
     });
 };
 exports.setAccessTokenCookie = setAccessTokenCookie;

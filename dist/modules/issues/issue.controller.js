@@ -51,17 +51,32 @@ exports.createIssue = (0, catchAsync_1.catchAsync)(async (req, res) => {
         });
     }
     let uploadedImages = [];
+    /* ======================================
+      CASE 1: multipart/form-data (BEST)
+    ====================================== */
     if (req.files && Array.isArray(req.files)) {
         const files = req.files;
-        uploadedImages = await Promise.all(files.map(async (file) => {
+        console.log(`📸 Uploading ${files.length} images...`);
+        uploadedImages = await Promise.all(files.map(async (file, index) => {
+            console.log(`🔄 Processing image ${index + 1}/${files.length}...`);
+            // ✅ Step 1: Compress image (MB → KB)
             const compressed = await (0, image_1.compressImage)(file.buffer);
+            console.log(`✅ Compressed: ${(file.size / 1024).toFixed(2)} KB → ${(compressed.length / 1024).toFixed(2)} KB`);
+            // ✅ Step 2: Upload to Cloudinary
             const uploaded = await (0, UploadImage_1.uploadBufferImage)(compressed, "issue-reports");
+            console.log(`☁️ Uploaded to Cloudinary: ${uploaded.url}`);
             return uploaded;
         }));
     }
+    /* ======================================
+      CASE 2: Base64 (fallback only)
+    ====================================== */
     else if (Array.isArray(images) && images.length > 0) {
-        uploadedImages = await Promise.all(images.map(async (img) => {
+        console.log(`📸 Uploading ${images.length} base64 images...`);
+        uploadedImages = await Promise.all(images.map(async (img, index) => {
+            console.log(`🔄 Processing base64 image ${index + 1}/${images.length}...`);
             const uploaded = await (0, UploadImage_1.uploadImageBase64)(img, "issue-reports");
+            console.log(`☁️ Uploaded to Cloudinary: ${uploaded.url}`);
             return uploaded;
         }));
     }

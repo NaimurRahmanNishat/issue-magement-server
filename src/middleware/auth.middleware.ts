@@ -13,7 +13,7 @@ export interface AuthRequest extends Request {
 
 // Authentication middleware
 export const isAuthenticated = async (req: AuthRequest, res: Response, next: NextFunction) => {
-  const token = req.cookies?.accessToken;
+  const token = req.cookies.accessToken;
   if (!token) return next(new AppError(401, "Access token missing"));
 
   let decoded;

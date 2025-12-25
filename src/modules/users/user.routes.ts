@@ -12,7 +12,7 @@ const router = Router();
 router.post("/register", validate(registerUserSchema), optionalAuth, register);
 router.post("/activate-user", validate(activateUserSchema), activateUser);
 router.post("/login", validate(loginUserSchema), login);
-router.post("/refresh-token", refreshToken);
+router.post("/refresh-token",  refreshToken);
 router.post("/logout", isAuthenticated, logout);
 router.post("/forgot-password", forgetPassword);
 router.post("/reset-password", resetPassword);
