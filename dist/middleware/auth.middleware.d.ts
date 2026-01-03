@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { IUser } from "../modules/users/user.model";
 export interface AuthRequest extends Request {
-    user?: IUser | undefined;
+    user?: IUser;
 }
 export declare const isAuthenticated: (req: AuthRequest, res: Response, next: NextFunction) => Promise<void>;
 export declare const authorizeRole: (...roles: string[]) => (req: AuthRequest, res: Response, next: NextFunction) => void;

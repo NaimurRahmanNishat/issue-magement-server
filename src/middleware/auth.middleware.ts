@@ -3,28 +3,28 @@ import User, { IUser } from "../modules/users/user.model";
 import jwt from "jsonwebtoken";
 import config from "../config";
 import { AppError } from "../utils/errorHandler";
-import { getCache, setCache } from "../utils/cache";
+import { getCache, setCache } from "../helper/redisCache";
 
 
 export interface AuthRequest extends Request {
-  user?: IUser | undefined;
+  user?: IUser;
 }
+
 
 
 // Authentication middleware
 export const isAuthenticated = async (req: AuthRequest, res: Response, next: NextFunction) => {
-  const token = req.cookies.accessToken;
+  const token = req.cookies?.accessToken || req.headers.authorization?.split("Bearer ")[1];
   if (!token) return next(new AppError(401, "Access token missing"));
 
   let decoded;
   try {
     decoded = jwt.verify(token, config.jwt_access_secret!) as { id: string };
-    
     // 1. try to get user from cache
     let user = await getCache(`user:${decoded.id}`);
     if (!user) {
       // 2. fallback to DB
-      const userDoc = await User.findById(decoded.id).select("-password +category");
+      const userDoc = await User.findById(decoded.id).select("-password");
       if (!userDoc) return next(new AppError(404, "User not found"));
       user = userDoc.toObject();
       // 3. store in cache for next time
@@ -55,12 +55,12 @@ export const optionalAuth = async (req: AuthRequest, res: Response, next: NextFu
 
   try {
     const decoded = jwt.verify(token, config.jwt_access_secret!) as { id: string };
-    let user = await getCache(decoded.id);
+    let user = await getCache(`user:${decoded.id}`);
     if (!user) {
       const userDoc = await User.findById(decoded.id).select("-password");
       if (userDoc) {
         user = userDoc.toObject();
-        await setCache(decoded.id, user);
+        await setCache(`user:${decoded.id}`, user);
       }
     }
     if (user) req.user = user;

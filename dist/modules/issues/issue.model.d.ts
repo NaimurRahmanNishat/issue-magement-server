@@ -12,8 +12,10 @@ export declare enum BangladeshDivision {
 }
 export declare enum IssueStatus {
     PENDING = "pending",
+    APPROVED = "approved",
     IN_PROGRESS = "in-progress",
-    SOLVED = "solved"
+    RESOLVED = "resolved",
+    REJECTED = "rejected"
 }
 export declare enum IssueCategory {
     ELECTRICITY = "electricity",
@@ -38,6 +40,8 @@ export interface IIssue extends Document {
     date: Date;
     approvedBy?: Types.ObjectId;
     approvedAt?: Date;
+    isReadByAdmin?: boolean;
+    readByAdminAt?: Date;
     createdAt?: Date;
     updatedAt?: Date;
 }

@@ -1,7 +1,7 @@
 "use strict";
+// src/modules/users/user.validation.ts
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.loginUserSchema = exports.activateUserSchema = exports.registerUserSchema = void 0;
-// src/modules/users/user.validation.ts
 const zod_1 = require("zod");
 // 1. register user validation
 exports.registerUserSchema = zod_1.z.object({
@@ -36,18 +36,4 @@ exports.loginUserSchema = zod_1.z.object({
         password: zod_1.z.string().min(6, "Password must be at least 6 characters long"),
     }),
 });
-// 4. Validation for editProfile
-// export const editProfileSchema = z.object({
-//   body: z.object({
-//     name: z.string().min(2, "Name must be at least 2 characters").optional(),
-//     email: z.string().email("Invalid email format").optional(),
-//     phone: z.string().regex(/^(\+8801|01)[3-9]\d{8}$/, "Invalid Bangladeshi phone number").optional(),
-//     zipCode: z.string().regex(/^\d{4}$/, "Zip code must be 4 digits").optional(),
-//     profession: z.string().min(2, "Profession must be at least 2 characters").optional(),
-//     division: z.string().min(1, "Division is required").optional(),
-//     // Optional: base64 fallback
-//     avatar: z.string().startsWith("data:image/").optional(),
-//     nidPic: z.array(z.string().startsWith("data:image/")).max(3, "Maximum 3 NID pictures allowed").optional(),
-//   }),
-// });
 //# sourceMappingURL=user.validation.js.map

@@ -1,20 +1,22 @@
+// src/modules/stats/stats.controller.ts
+
 import { Request, Response } from "express";
 import { catchAsync } from "../../middleware/catchAsync";
 import { AuthRequest } from "../../middleware/auth.middleware";
-import { CATEGORY_STATS_KEY, getCache, setCache } from "../../utils/cache";
 import { AppError } from "../../utils/errorHandler";
 import User from "../users/user.model";
 import Issue from "../issues/issue.model";
 import Review from "../comments/review.model";
+import { getCache, setCache } from "../../helper/redisCache";
 
 
 // 1. User Stats (cached)
 export const userStats = catchAsync(async (req: AuthRequest, res: Response) => {
-  const email = req.user?.email;  
-  
-  if (!email) throw new AppError(400, "Authentication required!");
+  const userId = req.user?._id;  
 
-  const cacheKey = `user_stats_${email}`;
+  if (!userId) throw new AppError(401, "Authentication required!");
+
+  const cacheKey = `user_stats_${userId}`;
   const cached = await getCache(cacheKey);
   
   if (cached) {
@@ -25,7 +27,7 @@ export const userStats = catchAsync(async (req: AuthRequest, res: Response) => {
     });
   }
 
-  const user = await User.findOne({ email });
+  const user = await User.findOne({ _id: userId });
   if (!user) throw new AppError(404, "User not found!");
 
   // Basic Stats
@@ -35,9 +37,17 @@ export const userStats = catchAsync(async (req: AuthRequest, res: Response) => {
   const totalReplies = userReviews.reduce((acc, r) => acc + (r.replies?.length || 0), 0);
   const totalReviewAndComment = totalReviews + totalReplies;
 
-  const totalPending = await Issue.countDocuments({ author: user._id, status: "pending" });
-  const totalInProgress = await Issue.countDocuments({ author: user._id, status: "in-progress" });
-  const totalSolved = await Issue.countDocuments({ author: user._id, status: "solved" });
+  // Count issues by status
+  const [totalPending, totalApproved, totalInProgress, totalResolved, totalRejected] = await Promise.all([
+    Issue.countDocuments({ author: user._id, status: "pending" }),
+    Issue.countDocuments({ author: user._id, status: "approved" }),
+    Issue.countDocuments({ author: user._id, status: "in-progress" }),
+    Issue.countDocuments({ author: user._id, status: "resolved" }),
+    Issue.countDocuments({ author: user._id, status: "rejected" }),
+  ]);
+
+  // Calculate totalSolved (resolved issues)
+  const totalSolved = totalResolved;
 
   // Monthly Issues Aggregation
   const monthlyIssues = await Issue.aggregate([
@@ -61,13 +71,16 @@ export const userStats = catchAsync(async (req: AuthRequest, res: Response) => {
   const stats = {
     totalIssues,
     totalReviewAndComment,
-    totalSolved,
     totalPending,
+    totalApproved,
     totalInProgress,
+    totalResolved,
+    totalRejected,
+    totalSolved, 
     monthlyIssues,  
   };
 
-  await setCache(cacheKey, stats, 600);
+  await setCache(cacheKey, stats, 600); 
 
   res.status(200).json({
     success: true,
@@ -78,7 +91,10 @@ export const userStats = catchAsync(async (req: AuthRequest, res: Response) => {
 
 
 // 2. Super Admin Stats (cached)
-export const adminStats = catchAsync(async (req: Request, res: Response) => {
+export const adminStats = catchAsync(async (req: AuthRequest, res: Response) => {
+    const userId = req.user?._id;  
+  if (!userId) throw new AppError(401, "Authentication required!");
+
   const cacheKey = `super_admin_stats`;
 
   // Check cache first
@@ -95,12 +111,18 @@ export const adminStats = catchAsync(async (req: Request, res: Response) => {
   const totalIssues = await Issue.countDocuments();
 
   // Count issues by status
-  const pendingIssues = await Issue.countDocuments({ status: "pending" });
-  const inProgressIssues = await Issue.countDocuments({ status: "in-progress" });
-  const solvedIssues = await Issue.countDocuments({ status: "solved" });
+  const [pendingIssues, approvedIssues, inProgressIssues, resolvedIssues, rejectedIssues] = await Promise.all([
+    Issue.countDocuments({ status: "pending" }),
+    Issue.countDocuments({ status: "approved" }),
+    Issue.countDocuments({ status: "in-progress" }),
+    Issue.countDocuments({ status: "resolved" }),
+    Issue.countDocuments({ status: "rejected" }),
+  ]);
 
   // Monthly issues aggregation
   const currentYear = new Date().getFullYear();
+  
+  // Template literal syntax
   const monthlyAggregation = await Issue.aggregate([
     {
       $match: {
@@ -127,9 +149,11 @@ export const adminStats = catchAsync(async (req: Request, res: Response) => {
   const stats = {
     totalIssues,
     pendingIssues,
+    approvedIssues,
     inProgressIssues,
-    solvedIssues,
-    monthlyIssues: monthlyPostIssue, // frontend expects this
+    resolvedIssues,
+    rejectedIssues,
+    monthlyIssues: monthlyPostIssue,
   };
 
   await setCache(cacheKey, stats, 600);
@@ -144,19 +168,21 @@ export const adminStats = catchAsync(async (req: Request, res: Response) => {
 
 // 3. Category Admin Stats (cached) 
 export const categoryAdminStats = catchAsync(async (req: AuthRequest, res: Response) => {
+  const userId = req.user?._id;
+  if (!userId) throw new AppError(401, "Authentication required!");
+
   if (req.user?.role !== "category-admin") {
     throw new AppError(403, "Unauthorized");
   }
 
-  // No database hit for category
   const category = req.user.category;
   if (!category) {
     throw new AppError(400, "Category not assigned");
   }
 
-  const cacheKey = CATEGORY_STATS_KEY(category);
+  const cacheKey = `category_stats:${category}`;
 
-  // cache first (o(1) time complexity)
+  // cache first
   const cached = await getCache(cacheKey);
   if (cached) {
     return res.status(200).json({
@@ -166,7 +192,7 @@ export const categoryAdminStats = catchAsync(async (req: AuthRequest, res: Respo
     });
   }
 
-  // data base parallel queries
+  // database parallel queries
   const year = new Date().getFullYear();
   const start = new Date(`${year}-01-01`);
   const end = new Date(`${year}-12-31`);
@@ -174,14 +200,18 @@ export const categoryAdminStats = catchAsync(async (req: AuthRequest, res: Respo
   const [
     totalIssues,
     pendingIssues,
+    approvedIssues,
     inProgressIssues,
-    solvedIssues,
+    resolvedIssues,
+    rejectedIssues,
     monthlyAgg,
   ] = await Promise.all([
     Issue.countDocuments({ category }),
     Issue.countDocuments({ category, status: "pending" }),
+    Issue.countDocuments({ category, status: "approved" }),
     Issue.countDocuments({ category, status: "in-progress" }),
-    Issue.countDocuments({ category, status: "solved" }),
+    Issue.countDocuments({ category, status: "resolved" }),
+    Issue.countDocuments({ category, status: "rejected" }),
     Issue.aggregate([
       {
         $match: { category, createdAt: { $gte: start, $lte: end } },
@@ -208,8 +238,10 @@ export const categoryAdminStats = catchAsync(async (req: AuthRequest, res: Respo
     category,
     totalIssues,
     pendingIssues,
+    approvedIssues,
     inProgressIssues,
-    solvedIssues,
+    resolvedIssues,
+    rejectedIssues,
     monthlyPostIssue,
   };
 
@@ -222,4 +254,3 @@ export const categoryAdminStats = catchAsync(async (req: AuthRequest, res: Respo
     data: stats,
   });
 });
-

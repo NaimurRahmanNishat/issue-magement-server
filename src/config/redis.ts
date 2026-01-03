@@ -9,16 +9,13 @@ if (!config.redis_url) {
 const redis = new Redis(config.redis_url);
 
 redis.on("connect", () => {
-  console.log("Redis: connected");
-});
-redis.on("ready", () => {
-  console.log("Redis: ready");
+  console.log("✅ Redis connected successfully!");
 });
 redis.on("error", (err) => {
   console.error("Redis error:", err);
 });
 redis.on("close", () => {
-  console.log("Redis: connection closed");
+  console.log("❌ Redis connection closed");
 });
 
 export { redis };

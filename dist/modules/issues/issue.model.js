@@ -1,4 +1,5 @@
 "use strict";
+// src/modules/issues/issue.model.ts
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -34,7 +35,6 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.IssueCategory = exports.IssueStatus = exports.BangladeshDivision = void 0;
-// src/modules/issues/issue.model.ts
 const mongoose_1 = __importStar(require("mongoose"));
 require("../comments/review.model");
 var BangladeshDivision;
@@ -51,8 +51,10 @@ var BangladeshDivision;
 var IssueStatus;
 (function (IssueStatus) {
     IssueStatus["PENDING"] = "pending";
+    IssueStatus["APPROVED"] = "approved";
     IssueStatus["IN_PROGRESS"] = "in-progress";
-    IssueStatus["SOLVED"] = "solved";
+    IssueStatus["RESOLVED"] = "resolved";
+    IssueStatus["REJECTED"] = "rejected";
 })(IssueStatus || (exports.IssueStatus = IssueStatus = {}));
 var IssueCategory;
 (function (IssueCategory) {
@@ -81,15 +83,12 @@ const issueSchema = new mongoose_1.Schema({
         trim: true,
         minlength: [10, "Description must be at least 10 characters long"],
     },
-    images: {
-        type: [
-            {
-                public_id: { type: String },
-                url: { type: String, required: true },
-            },
-        ],
-        default: [],
-    },
+    images: [
+        {
+            public_id: { type: String, required: true },
+            url: { type: String, required: true },
+        },
+    ],
     location: {
         type: String,
         required: [true, "Location is required"],
@@ -110,6 +109,8 @@ const issueSchema = new mongoose_1.Schema({
     date: { type: Date, default: Date.now },
     approvedBy: { type: mongoose_1.Schema.Types.ObjectId, ref: "User" },
     approvedAt: { type: Date },
+    isReadByAdmin: { type: Boolean, default: false },
+    readByAdminAt: { type: Date },
 }, { timestamps: true });
 // Full-text search index
 issueSchema.index({

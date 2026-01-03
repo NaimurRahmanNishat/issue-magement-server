@@ -1,4 +1,5 @@
 "use strict";
+// src/modules/users/user.controller.ts
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -36,33 +37,31 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getSocketToken = exports.deleteCategoryAdminRole = exports.updateCategoryAdminRole = exports.getAllCategoryAdmins = exports.getAllUsers = exports.getProfileById = exports.editProfileById = exports.resetPassword = exports.forgetPassword = exports.logout = exports.refreshToken = exports.login = exports.activateUser = exports.register = void 0;
-const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
+exports.deleteCategoryAdminRole = exports.updateCategoryAdminRole = exports.getAllCategoryAdmins = exports.getAllUsers = exports.getProfileById = exports.editProfileById = exports.resetPassword = exports.forgetPassword = exports.logout = exports.refreshToken = exports.login = exports.activateUser = exports.register = void 0;
 const catchAsync_1 = require("../../middleware/catchAsync");
 const user_model_1 = __importStar(require("./user.model"));
 const errorHandler_1 = require("../../utils/errorHandler");
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const crypto_1 = __importDefault(require("crypto"));
 const email_1 = require("../../utils/email");
-const config_1 = __importDefault(require("../../config"));
 const redis_1 = require("../../config/redis");
 const token_1 = require("../../utils/token");
-const cache_1 = require("../../utils/cache");
-const cacheConfig_1 = require("../../config/cacheConfig");
 const cookie_1 = require("../../utils/cookie");
 const senitize_1 = require("../../helper/senitize");
-const UploadImage_1 = require("../../utils/UploadImage");
-const image_1 = require("../../utils/image");
-// 1. register user complexity o(1)
+const redisCache_1 = require("../../helper/redisCache");
+const cursorPagination_1 = require("../../helper/cursorPagination");
+const sharp_1 = __importDefault(require("sharp"));
+const uploadToCloudinary_1 = require("../../utils/uploadToCloudinary");
+// 1. Register User time complexity: O(1)
 exports.register = (0, catchAsync_1.catchAsync)(async (req, res) => {
     const body = (0, senitize_1.sanitizeBody)(req.body);
     const { name, email, password, confirmPassword, phone, nid, role, category, division } = body;
-    // 1. Password match check
+    // Validate password match
     if (password !== confirmPassword) {
         throw new errorHandler_1.AppError(400, "Passwords do not match!");
     }
-    // 2. Check duplicate email/phone/nid in ONE QUERY
-    const existing = await user_model_1.default.findOne({ $or: [{ email }, { phone }, { nid }], }).select("email phone nid");
+    // Check for duplicate email/phone/nid in ONE query
+    const existing = await user_model_1.default.findOne({ $or: [{ email }, { phone }, { nid }] }).select("email phone nid").lean();
     if (existing) {
         if (existing.email === email)
             throw new errorHandler_1.AppError(400, "Email already exists!");
@@ -71,20 +70,31 @@ exports.register = (0, catchAsync_1.catchAsync)(async (req, res) => {
         if (existing.nid === nid)
             throw new errorHandler_1.AppError(400, "NID already exists!");
     }
-    // 3. First registered user → super-admin
+    // First registered user becomes super-admin
     const userCount = await user_model_1.default.estimatedDocumentCount();
     if (userCount === 0) {
-        const hashedPassword = await bcryptjs_1.default.hash(password, 10);
-        await user_model_1.default.create({ name, email, password: hashedPassword, phone, nid, isVerified: true, role: "super-admin" });
+        const hashedPassword = await bcryptjs_1.default.hash(password, 12);
+        const superAdmin = await user_model_1.default.create({
+            name,
+            email,
+            password: hashedPassword,
+            phone,
+            nid,
+            isVerified: true,
+            role: "super-admin",
+        });
         return res.status(201).json({
             success: true,
             message: "Super admin created successfully!",
             data: {
-                message: "Super admin created successfully!",
+                id: superAdmin._id,
+                name: superAdmin.name,
+                email: superAdmin.email,
+                role: superAdmin.role,
             },
         });
     }
-    // 4. Category-admin registration (Only super-admin can create)
+    // Category-admin registration (Only super-admin can create)
     if (role === "category-admin") {
         if (!req.user || req.user.role !== "super-admin") {
             throw new errorHandler_1.AppError(403, "Only super-admin can register category-admins!");
@@ -92,25 +102,47 @@ exports.register = (0, catchAsync_1.catchAsync)(async (req, res) => {
         if (!category) {
             throw new errorHandler_1.AppError(400, "Category is required for category-admin!");
         }
-        const hashedPassword = await bcryptjs_1.default.hash(password, 10);
-        await user_model_1.default.create({ name, email, password: hashedPassword, phone, nid, division, role: "category-admin", isVerified: true, category });
+        const hashedPassword = await bcryptjs_1.default.hash(password, 12);
+        const categoryAdmin = await user_model_1.default.create({
+            name,
+            email,
+            password: hashedPassword,
+            phone,
+            nid,
+            division,
+            role: "category-admin",
+            isVerified: true,
+            category,
+        });
         return res.status(201).json({
             success: true,
             message: "Category admin created successfully!",
             data: {
-                message: "Category admin created successfully!",
+                id: categoryAdmin._id,
+                name: categoryAdmin.name,
+                email: categoryAdmin.email,
+                role: categoryAdmin.role,
+                category: categoryAdmin.category,
             },
         });
     }
-    // 5. Regular user registration → via activation code
-    const hashedPassword = await bcryptjs_1.default.hash(password, 10);
+    // Regular user registration with activation code
+    const hashedPassword = await bcryptjs_1.default.hash(password, 12);
     const activationCode = crypto_1.default.randomBytes(3).toString("hex").toUpperCase();
     const activationCodeExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
     // Store user data temporarily in Redis
-    const userData = { name, email, password: hashedPassword, phone, nid, role: "user", activationCode, activationCodeExpiry: activationCodeExpiry.toISOString() };
-    await redis_1.redis.set(`activation:${email}`, JSON.stringify(userData), "EX", 600); // 10 minutes
-    // Create activation token
-    const token = jsonwebtoken_1.default.sign({ email, activationCode }, config_1.default.jwt_access_secret, { expiresIn: "15m" });
+    const userData = {
+        name,
+        email,
+        password: hashedPassword,
+        phone,
+        nid,
+        role: "user",
+        activationCode,
+        activationCodeExpiry: activationCodeExpiry.toISOString(),
+    };
+    await redis_1.redis.set(`activation:${email}`, JSON.stringify(userData), "EX", 600);
+    // Send activation email
     try {
         await (0, email_1.sendActivationEmail)(email, activationCode);
     }
@@ -120,14 +152,14 @@ exports.register = (0, catchAsync_1.catchAsync)(async (req, res) => {
     }
     res.status(200).json({
         success: true,
-        message: "Check your email to activate your account.",
+        message: "Registration successful! Check your email to activate your account.",
         data: {
-            message: "Check your email to activate your account.",
+            email,
             expiresIn: "10 minutes",
         },
     });
 });
-// 2. Activate user account complexity o(1)
+// 2. Activate User Account time complexity: O(1)
 exports.activateUser = (0, catchAsync_1.catchAsync)(async (req, res) => {
     const body = (0, senitize_1.sanitizeBody)(req.body);
     const { email, activationCode } = body;
@@ -162,46 +194,52 @@ exports.activateUser = (0, catchAsync_1.catchAsync)(async (req, res) => {
     });
     // Delete from Redis after successful activation
     await redis_1.redis.del(`activation:${email}`);
-    // Generate JWT token for login
-    const token = jsonwebtoken_1.default.sign({ userId: newUser._id, email: newUser.email, role: newUser.role }, config_1.default.jwt_access_secret, { expiresIn: "7d" });
+    // Generate tokens
+    const accessToken = (0, token_1.generateAccessToken)({ id: newUser._id.toString(), role: newUser.role });
+    const refreshToken = (0, token_1.generateRefreshToken)({ id: newUser._id.toString(), role: newUser.role });
+    // Set cookies
+    (0, cookie_1.setAuthCookies)(res, accessToken, refreshToken);
+    // Cache user data
+    const safeUser = {
+        _id: newUser._id.toString(),
+        name: newUser.name,
+        email: newUser.email,
+        role: newUser.role,
+        isVerified: newUser.isVerified,
+    };
     res.status(201).json({
         success: true,
         message: "Account activated successfully!",
-        data: {
-            token,
-            user: {
-                id: newUser._id,
-                name: newUser.name,
-                email: newUser.email,
-                role: newUser.role,
-            },
-        },
+        data: safeUser,
     });
 });
-// 3. login user complexity o(1)
+// 3. Login User time complexity: O(1)
 exports.login = (0, catchAsync_1.catchAsync)(async (req, res) => {
     const body = (0, senitize_1.sanitizeBody)(req.body);
     const { email, password } = body;
-    // validation
+    // Validation
     if (!email || !user_model_1.emailRegex.test(email)) {
         throw new errorHandler_1.AppError(400, "Please provide a valid email!");
     }
     if (!password || password.length < 6) {
-        throw new errorHandler_1.AppError(400, "Password is required!");
+        throw new errorHandler_1.AppError(400, "Password must be at least 6 characters!");
     }
-    const user = await user_model_1.default.findOne({ email }).select("+password");
+    const user = await user_model_1.default.findOne({ email }).select("+password").lean();
     if (!user)
         throw new errorHandler_1.AppError(404, "User not found!");
     const isMatch = await bcryptjs_1.default.compare(password, user.password);
     if (!isMatch)
         throw new errorHandler_1.AppError(401, "Invalid password!");
-    const accessToken = (0, token_1.generateAccessToken)({ id: user._id, role: user.role });
-    const refreshToken = (0, token_1.generateRefreshToken)({ id: user._id, role: user.role });
-    // Refresh token to database save (cookie not set)
-    const expiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-    await (0, token_1.updateRefreshToken)(user, refreshToken, expiry);
-    //  access token cookie set
+    // Check if user is verified
+    if (!user.isVerified) {
+        throw new errorHandler_1.AppError(403, "Please verify your email before logging in!");
+    }
+    // Generate tokens
+    const accessToken = (0, token_1.generateAccessToken)({ id: user._id.toString(), role: user.role });
+    const refreshToken = (0, token_1.generateRefreshToken)({ id: user._id.toString(), role: user.role });
+    // Set cookies
     (0, cookie_1.setAuthCookies)(res, accessToken, refreshToken);
+    // Prepare safe user data
     const safeUser = {
         _id: user._id.toString(),
         name: user.name,
@@ -214,93 +252,60 @@ exports.login = (0, catchAsync_1.catchAsync)(async (req, res) => {
         profession: user.profession,
         division: user.division,
         nidPic: user.nidPic,
-        avatar: user.avatar
+        avatar: user.avatar,
     };
-    await (0, cache_1.setCache)(`user:${user._id}`, safeUser, cacheConfig_1.USER_CACHE_TTL);
     res.status(200).json({
         success: true,
         message: "Login successful!",
         data: safeUser,
     });
 });
-// 4. refresh token complexity o(1)
+// 4. Refresh Access Token time complexity: O(1)
 exports.refreshToken = (0, catchAsync_1.catchAsync)(async (req, res) => {
-    const body = (0, senitize_1.sanitizeBody)(req.body);
-    const userId = body.userId; // Frontend from userId send
-    if (!userId) {
-        throw new errorHandler_1.AppError(401, "User ID is required!");
+    const oldRefreshToken = req.cookies?.refreshToken;
+    if (!oldRefreshToken) {
+        throw new errorHandler_1.AppError(401, "Refresh token missing");
     }
-    // Database from user and refresh token fetch
-    const user = await user_model_1.default.findById(userId).select("+refreshToken +refreshTokenExpiry");
-    if (!user || !user.refreshToken || !user.refreshTokenExpiry) {
-        throw new errorHandler_1.AppError(401, "No refresh token found. Please login again.");
-    }
-    // Check if refresh token expired
-    if (new Date() > user.refreshTokenExpiry) {
-        // Expired token clear
-        user.refreshToken = null;
-        user.refreshTokenExpiry = null;
-        await user.save();
-        throw new errorHandler_1.AppError(401, "Refresh token expired. Please login again.");
-    }
-    // Verify refresh token
+    let decoded;
     try {
-        const decoded = (0, token_1.verifyRefreshToken)(user.refreshToken);
-        // Security check: decoded id must match userId
-        if (decoded.id !== userId) {
-            throw new errorHandler_1.AppError(401, "Invalid token");
-        }
-        // Generate new access token
-        const accessToken = (0, token_1.generateAccessToken)({ id: user._id, role: user.role });
-        // Update access token cookie
-        (0, cookie_1.setAccessTokenCookie)(res, accessToken);
-        // Response 
-        const safeUser = {
-            _id: user._id.toString(),
-            name: user.name,
-            email: user.email,
-            role: user.role,
-            category: user.category,
-            isVerified: user.isVerified,
-            phone: user.phone,
-            zipCode: user.zipCode,
-            profession: user.profession,
-            division: user.division,
-            nidPic: user.nidPic,
-            avatar: user.avatar
-        };
-        // Update cache
-        await (0, cache_1.setCache)(`user:${user._id}`, safeUser, cacheConfig_1.USER_CACHE_TTL);
-        res.status(200).json({
-            success: true,
-            message: "Access token refreshed successfully!",
-            data: safeUser,
-        });
+        decoded = (0, token_1.verifyRefreshToken)(oldRefreshToken);
     }
-    catch (error) {
-        // Invalid token - clear from database
-        await user_model_1.default.updateOne({ _id: userId }, { $set: { refreshToken: null, refreshTokenExpiry: null } });
-        throw new errorHandler_1.AppError(401, "Invalid refresh token. Please login again.");
+    catch {
+        throw new errorHandler_1.AppError(401, "Invalid refresh token");
     }
+    const user = await user_model_1.default.findById(decoded.id).select("role").lean();
+    if (!user) {
+        throw new errorHandler_1.AppError(401, "User no longer exists");
+    }
+    // Generate new access token
+    const newAccessToken = (0, token_1.generateAccessToken)({ id: decoded.id, role: user.role });
+    // Update access token cookie
+    (0, cookie_1.setAccessTokenCookie)(res, newAccessToken);
+    res.status(200).json({
+        success: true,
+        message: "Access token refreshed successfully",
+    });
 });
-// 5. logout complexity o(1)
+// 5. Logout User time complexity: O(1)
 exports.logout = (0, catchAsync_1.catchAsync)(async (req, res) => {
     const userId = req.user?._id;
-    if (userId) {
-        // Redis from refresh token & user state delete 
-        await redis_1.redis.del(`refresh_token:${userId}`);
-        // user cache invalidate (delete from cache)
-        await (0, cache_1.invalidateCache)(userId.toString());
-    }
-    // Cookies clear (explicit options)
-    res.clearCookie("accessToken");
-    res.clearCookie("refreshToken");
+    // Clear cookies
+    res.clearCookie("accessToken", {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+    });
+    res.clearCookie("refreshToken", {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+    });
     res.status(200).json({
         success: true,
         message: "Logged out successfully",
     });
 });
-// 6. Forget Password (OTP Based) complexity o(1)
+// 6. Forget Password (OTP Based) time complexity: O(1)
 exports.forgetPassword = (0, catchAsync_1.catchAsync)(async (req, res) => {
     const body = (0, senitize_1.sanitizeBody)(req.body);
     const { email } = body;
@@ -309,10 +314,10 @@ exports.forgetPassword = (0, catchAsync_1.catchAsync)(async (req, res) => {
     const user = await user_model_1.default.findOne({ email });
     if (!user)
         throw new errorHandler_1.AppError(404, "User not found!");
-    // 6 digit OTP
+    // Generate 6-digit OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     user.resetPasswordOtp = otp;
-    user.resetPasswordOtpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 min expire
+    user.resetPasswordOtpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
     await user.save({ validateBeforeSave: false });
     try {
         await (0, email_1.sendActivationEmail)(email, `Your password reset OTP is: ${otp}`);
@@ -326,47 +331,52 @@ exports.forgetPassword = (0, catchAsync_1.catchAsync)(async (req, res) => {
     res.status(200).json({
         success: true,
         message: "Password reset OTP sent successfully to your email.",
+        data: {
+            email,
+            expiresIn: "10 minutes",
+        },
     });
 });
-// 7. Reset Password complexity o(1)
+// 7. Reset Password time complexity: O(1)
 exports.resetPassword = (0, catchAsync_1.catchAsync)(async (req, res) => {
     const body = (0, senitize_1.sanitizeBody)(req.body);
     const { otp, newPassword } = body;
-    if (!otp || !newPassword)
+    if (!otp || !newPassword) {
         throw new errorHandler_1.AppError(400, "OTP and new password are required!");
-    // find user by OTP
+    }
+    if (newPassword.length < 6) {
+        throw new errorHandler_1.AppError(400, "Password must be at least 6 characters!");
+    }
+    // Find user by OTP
     const user = await user_model_1.default.findOne({
         resetPasswordOtp: otp,
         resetPasswordOtpExpiry: { $gt: new Date() },
-    }).select("+password");
+    });
     if (!user)
         throw new errorHandler_1.AppError(400, "Invalid or expired OTP!");
-    // update password
-    user.password = newPassword;
+    // Hash new password
+    user.password = await bcryptjs_1.default.hash(newPassword, 12);
     user.resetPasswordOtp = null;
     user.resetPasswordOtpExpiry = null;
     await user.save();
-    // Redis Cache update
-    const userWithoutPassword = { ...user.toObject(), password: undefined };
-    await (0, cache_1.setCache)(user._id.toString(), userWithoutPassword, cacheConfig_1.USER_CACHE_TTL);
+    // Invalidate user cache
+    await (0, redisCache_1.deleteCache)(`user:${user._id}`);
     res.status(200).json({
         success: true,
         message: "Password reset successfully!",
     });
 });
-// 8. edit profile by id complexity o(1)
+// 8. Edit Profile by ID time complexity: O(n)
 exports.editProfileById = (0, catchAsync_1.catchAsync)(async (req, res) => {
     const userId = req.user?._id;
     if (!userId)
         throw new errorHandler_1.AppError(401, "Unauthorized");
-    const { name, email, phone, zipCode, profession, division, avatar, nidPic } = req.body;
+    const { name, email, phone, zipCode, profession, division } = req.body;
     const existingUser = await user_model_1.default.findById(userId);
     if (!existingUser)
         throw new errorHandler_1.AppError(404, "User not found");
     const updateData = {};
-    /* ==========================
-      BASIC FIELDS
-    ========================== */
+    // ================= BASIC FIELDS =================
     if (name)
         updateData.name = name;
     if (email)
@@ -379,96 +389,58 @@ exports.editProfileById = (0, catchAsync_1.catchAsync)(async (req, res) => {
         updateData.profession = profession;
     if (division)
         updateData.division = division;
-    /* ==========================
-      AVATAR (SINGLE IMAGE)
-    ========================== */
-    let newAvatar;
-    // Case 1: multipart/form-data (single file upload)
-    if (req.files && req.files.avatar?.[0]) {
-        const file = req.files.avatar[0];
-        console.log("📸 Uploading new avatar...");
-        console.log(`Original size: ${(file.size / 1024).toFixed(2)} KB`);
-        // Compress image
-        const compressed = await (0, image_1.compressImage)(file.buffer);
-        console.log(`Compressed size: ${(compressed.length / 1024).toFixed(2)} KB`);
-        // Upload to Cloudinary
-        newAvatar = await (0, UploadImage_1.uploadBufferImage)(compressed, "user-avatars");
-        console.log(`✅ Avatar uploaded: ${newAvatar.url}`);
-    }
-    // Case 2: base64 fallback
-    else if (typeof avatar === "string" && avatar.startsWith("data:image/")) {
-        console.log("📸 Uploading base64 avatar...");
-        newAvatar = await (0, UploadImage_1.uploadImageBase64)(avatar, "user-avatars");
-        console.log(`✅ Avatar uploaded: ${newAvatar.url}`);
-    }
-    // If new avatar uploaded, update and delete old
-    if (newAvatar) {
-        updateData.avatar = newAvatar;
-        // Delete old avatar from Cloudinary
+    // ================= AVATAR (SINGLE IMAGE) =================
+    const avatarFile = req.files?.avatar?.[0];
+    if (avatarFile) {
+        const avatarBuffer = await (0, sharp_1.default)(avatarFile.buffer)
+            .resize(500, 500)
+            .webp({ quality: 70 })
+            .toBuffer();
+        const avatarUpload = await (0, uploadToCloudinary_1.uploadToCloudinary)(avatarBuffer, "users/avatar");
+        updateData.avatar = {
+            public_id: avatarUpload.public_id,
+            url: avatarUpload.secure_url,
+        };
+        // delete old avatar
         if (existingUser.avatar?.public_id &&
-            existingUser.avatar.public_id.startsWith("user-avatars/")) {
-            console.log(`🗑️ Deleting old avatar: ${existingUser.avatar.public_id}`);
-            await (0, UploadImage_1.deleteImageFromCloudinary)(existingUser.avatar.public_id).catch(() => {
-                console.warn("Failed to delete old avatar");
-            });
+            existingUser.avatar.public_id.startsWith("users/avatar")) {
+            await (0, uploadToCloudinary_1.deleteMultipleImagesFromCloudinary)([
+                existingUser.avatar.public_id,
+            ]).catch(() => { });
         }
     }
-    /* ==========================
-      NID PICTURES (MULTIPLE)
-    ========================== */
-    let newNidPics = [];
-    // Case 1: multipart/form-data (multiple files)
-    if (req.files && req.files.nidPic) {
-        const files = req.files.nidPic;
-        console.log(`📸 Uploading ${files.length} NID pictures...`);
-        newNidPics = await Promise.all(files.map(async (file, index) => {
-            console.log(`Processing NID ${index + 1}/${files.length}...`);
-            console.log(`Original: ${(file.size / 1024).toFixed(2)} KB`);
-            const compressed = await (0, image_1.compressImage)(file.buffer);
-            console.log(`Compressed: ${(compressed.length / 1024).toFixed(2)} KB`);
-            const uploaded = await (0, UploadImage_1.uploadBufferImage)(compressed, "user-nid");
-            console.log(`✅ Uploaded: ${uploaded.url}`);
-            return uploaded;
+    // ================= NID PICTURES (MULTIPLE) =================
+    const nidFiles = req.files?.nidPic;
+    if (nidFiles && nidFiles.length > 0) {
+        if (nidFiles.length > 3) {
+            throw new errorHandler_1.AppError(400, "Maximum 3 NID images allowed");
+        }
+        const compressedBuffers = await Promise.all(nidFiles.map((file) => (0, sharp_1.default)(file.buffer)
+            .resize({ width: 1200 })
+            .webp({ quality: 65 })
+            .toBuffer()));
+        const uploads = await Promise.all(compressedBuffers.map((buffer) => (0, uploadToCloudinary_1.uploadToCloudinary)(buffer, "users/nid")));
+        updateData.nidPic = uploads.map((img) => ({
+            public_id: img.public_id,
+            url: img.secure_url,
         }));
-    }
-    // Case 2: base64 fallback (multiple images)
-    else if (Array.isArray(nidPic) && nidPic.length > 0) {
-        const base64Images = nidPic.filter((img) => typeof img === "string" && img.startsWith("data:image/"));
-        if (base64Images.length > 0) {
-            console.log(`📸 Uploading ${base64Images.length} base64 NID pictures...`);
-            newNidPics = await Promise.all(base64Images.map(async (img, index) => {
-                console.log(`Processing NID ${index + 1}/${base64Images.length}...`);
-                const uploaded = await (0, UploadImage_1.uploadImageBase64)(img, "user-nid");
-                console.log(`✅ Uploaded: ${uploaded.url}`);
-                return uploaded;
-            }));
-        }
-    }
-    // If new NID pics uploaded, update and delete old
-    if (newNidPics.length > 0) {
-        updateData.nidPic = newNidPics;
-        // Delete old NID images from Cloudinary
+        // delete old nid images
         if (existingUser.nidPic?.length) {
             const oldIds = existingUser.nidPic
-                .filter((p) => p.public_id.startsWith("user-nid/"))
-                .map((p) => p.public_id);
+                .filter((i) => i.public_id.startsWith("users/nid"))
+                .map((i) => i.public_id);
             if (oldIds.length) {
-                console.log(`🗑️ Deleting ${oldIds.length} old NID pictures...`);
-                await (0, UploadImage_1.deleteMultipleImagesFromCloudinary)(oldIds).catch(() => {
-                    console.warn("Failed to delete old NID pictures");
-                });
+                await (0, uploadToCloudinary_1.deleteMultipleImagesFromCloudinary)(oldIds).catch(() => { });
             }
         }
     }
-    // Check if there's anything to update
     if (Object.keys(updateData).length === 0) {
         throw new errorHandler_1.AppError(400, "No valid fields to update");
     }
-    // Update user in database
     const updatedUser = await user_model_1.default.findByIdAndUpdate(userId, updateData, {
         new: true,
         runValidators: true,
-        select: "-password -refreshToken -activationCode -resetPasswordOtp -refreshTokenExpiry",
+        select: "-password -activationCode -resetPasswordOtp",
     });
     res.status(200).json({
         success: true,
@@ -476,75 +448,159 @@ exports.editProfileById = (0, catchAsync_1.catchAsync)(async (req, res) => {
         data: updatedUser,
     });
 });
-// 9. get user profile by id complexity o(1)
+// 9. Get User Profile by ID time complexity: O(1)
 exports.getProfileById = (0, catchAsync_1.catchAsync)(async (req, res) => {
     const userId = req.user?._id;
     if (!userId)
         throw new errorHandler_1.AppError(401, "Unauthorized");
-    const user = await user_model_1.default.findById(userId).select("-password -refreshToken -refreshTokenExpiry -activationCode -activationCodeExpiry -resetPasswordOtp -resetPasswordOtpExpiry");
+    // Try cache first
+    const cacheKey = `user:${userId}`;
+    try {
+        const cached = await (0, redisCache_1.getCache)(cacheKey);
+        if (cached) {
+            console.log(`⚡ Cache hit: ${cacheKey}`);
+            return res.status(200).json({
+                success: true,
+                message: "Profile fetched (from cache)",
+                data: cached,
+            });
+        }
+    }
+    catch (cacheError) {
+        console.error("Cache retrieval error:", cacheError);
+    }
+    const user = await user_model_1.default.findById(userId)
+        .select("-password -refreshToken -refreshTokenExpiry -activationCode -activationCodeExpiry -resetPasswordOtp -resetPasswordOtpExpiry")
+        .lean();
     if (!user)
         throw new errorHandler_1.AppError(404, "User not found");
     res.status(200).json({
         success: true,
-        message: "Profile fetched successfully!",
+        message: "Profile fetched successfully",
         data: user,
     });
 });
-// 10. get all normal users (only super-admin and category-admin can access) complexity o(n)
+// 10. Get All Users (Cursor Pagination) time complexity: O(n)
 exports.getAllUsers = (0, catchAsync_1.catchAsync)(async (req, res) => {
     const role = req.user?.role;
     if (role !== "category-admin" && role !== "super-admin") {
         throw new errorHandler_1.AppError(403, "You are not authorized to access user list!");
     }
-    const page = Math.max(Number(req.query.page) || 1, 1);
-    const limit = Math.min(Number(req.query.limit) || 10, 50);
-    const skip = (page - 1) * limit;
-    const cacheKey = `users:list:role=user:page=${page}:limit=${limit}`;
-    // ✅ CACHE READ
-    const cached = await (0, cache_1.getCache)(cacheKey);
-    if (cached) {
-        return res.status(200).json({
-            success: true,
-            message: "User list fetched from cache",
-            ...cached,
-        });
+    const { cursor, limit = 10, sortOrder = "desc" } = req.query;
+    const cacheKey = `users:list:role=user:${cursor || 'first'}:${limit}:${sortOrder}`;
+    // Try cache first
+    try {
+        const cached = await (0, redisCache_1.getCache)(cacheKey);
+        if (cached) {
+            console.log(`⚡ Cache hit: ${cacheKey}`);
+            return res.status(200).json({
+                success: true,
+                message: "User list fetched (from cache)",
+                ...cached,
+            });
+        }
     }
-    // ✅ Parallel DB queries
-    const [totalUsers, users] = await Promise.all([
-        user_model_1.default.countDocuments({ role: "user" }),
-        user_model_1.default.find({ role: "user" })
-            .select("-password -refreshToken -refreshTokenExpiry -activationCode -activationCodeExpiry -resetPasswordOtp -resetPasswordOtpExpiry")
-            .skip(skip)
-            .limit(limit)
-            .lean(),
-    ]);
-    const payload = { totalUsers, data: users };
-    // ✅ CACHE WRITE
-    await (0, cache_1.setCache)(cacheKey, payload, 600); // 10 min TTL
+    catch (cacheError) {
+        console.error("Cache retrieval error:", cacheError);
+    }
+    // Calculate cursor pagination
+    const paginationOptions = (0, cursorPagination_1.calculateCursorPagination)({
+        limit: parseInt(limit),
+        cursor: cursor,
+        sortBy: 'createdAt',
+        sortOrder: sortOrder,
+    });
+    // Build query
+    const query = {
+        role: "user",
+        ...paginationOptions.filter,
+    };
+    // Fetch users
+    const users = await user_model_1.default.find(query)
+        .select("-password -refreshToken -refreshTokenExpiry -activationCode -activationCodeExpiry -resetPasswordOtp -resetPasswordOtpExpiry")
+        .sort({ [paginationOptions.sortBy]: paginationOptions.sortOrder === 'asc' ? 1 : -1 })
+        .limit(paginationOptions.limit + 1)
+        .lean();
+    // Create pagination metadata
+    const { data, meta } = (0, cursorPagination_1.createCursorPaginationMeta)(users, paginationOptions.limit, paginationOptions.sortBy, paginationOptions.sortOrder);
+    // Get total count
+    const total = await user_model_1.default.countDocuments({ role: "user" });
+    const responseData = {
+        data,
+        meta: {
+            ...meta,
+            total,
+        },
+    };
+    // Cache for 10 minutes
+    await (0, redisCache_1.setCache)(cacheKey, responseData, 600);
     res.status(200).json({
         success: true,
         message: "User list fetched successfully",
-        ...payload,
+        ...responseData,
     });
 });
-// 11. get all category admin complexity o(n)
+// 11. Get All Category Admins (Cursor Pagination) time complexity: O(n)
 exports.getAllCategoryAdmins = (0, catchAsync_1.catchAsync)(async (req, res) => {
     const role = req.user?.role;
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
     if (role !== "super-admin") {
         throw new errorHandler_1.AppError(403, "You are not authorized to access category admin list!");
     }
-    const totalCategoryAdmins = await user_model_1.default.countDocuments({ role: "category-admin" });
-    const categoryAdmins = await user_model_1.default.find({ role: "category-admin" }).skip((page - 1) * limit).limit(limit).select("-password -refreshToken -refreshTokenExpiry -activationCode -activationCodeExpiry -resetPasswordOtp -resetPasswordOtpExpiry");
+    const { cursor, limit = 10, sortOrder = "desc" } = req.query;
+    const cacheKey = `users:list:role=category-admin:${cursor || 'first'}:${limit}:${sortOrder}`;
+    // Try cache first
+    try {
+        const cached = await (0, redisCache_1.getCache)(cacheKey);
+        if (cached) {
+            console.log(`⚡ Cache hit: ${cacheKey}`);
+            return res.status(200).json({
+                success: true,
+                message: "Category admin list fetched (from cache)",
+                ...cached,
+            });
+        }
+    }
+    catch (cacheError) {
+        console.error("Cache retrieval error:", cacheError);
+    }
+    // Calculate cursor pagination
+    const paginationOptions = (0, cursorPagination_1.calculateCursorPagination)({
+        limit: parseInt(limit),
+        cursor: cursor,
+        sortBy: 'createdAt',
+        sortOrder: sortOrder,
+    });
+    // Build query
+    const query = {
+        role: "category-admin",
+        ...paginationOptions.filter,
+    };
+    // Fetch category admins
+    const categoryAdmins = await user_model_1.default.find(query)
+        .select("-password -refreshToken -refreshTokenExpiry -activationCode -activationCodeExpiry -resetPasswordOtp -resetPasswordOtpExpiry")
+        .sort({ [paginationOptions.sortBy]: paginationOptions.sortOrder === 'asc' ? 1 : -1 })
+        .limit(paginationOptions.limit + 1)
+        .lean();
+    // Create pagination metadata
+    const { data, meta } = (0, cursorPagination_1.createCursorPaginationMeta)(categoryAdmins, paginationOptions.limit, paginationOptions.sortBy, paginationOptions.sortOrder);
+    // Get total count
+    const total = await user_model_1.default.countDocuments({ role: "category-admin" });
+    const responseData = {
+        data,
+        meta: {
+            ...meta,
+            total,
+        },
+    };
+    // Cache for 10 minutes
+    await (0, redisCache_1.setCache)(cacheKey, responseData, 600);
     res.status(200).json({
         success: true,
         message: "Category admin list fetched successfully",
-        totalCategoryAdmins,
-        data: categoryAdmins,
+        ...responseData,
     });
 });
-// 12. update category admin role complexity o(1)
+// 12. Update Category Admin Role time complexity: O(1)
 exports.updateCategoryAdminRole = (0, catchAsync_1.catchAsync)(async (req, res) => {
     const { id } = req.params;
     const { category, division } = req.body;
@@ -560,20 +616,27 @@ exports.updateCategoryAdminRole = (0, catchAsync_1.catchAsync)(async (req, res) 
         throw new errorHandler_1.AppError(400, "Only category-admin can be updated!");
     }
     // Update fields
-    user.category = category ?? user.category;
-    user.division = division ?? user.division;
+    if (category)
+        user.category = category;
+    if (division)
+        user.division = division;
     await user.save();
+    // Invalidate cache
+    await (0, redisCache_1.deleteCache)(`user:${id}`);
+    await (0, redisCache_1.deleteCache)(`users:list:role=category-admin:*`);
     res.status(200).json({
         success: true,
-        message: "Category admin role updated successfully!",
+        message: "Category admin updated successfully!",
         data: {
             id: user._id,
+            name: user.name,
+            email: user.email,
             category: user.category,
             division: user.division,
-        }
+        },
     });
 });
-// 13. delete category admin role complexity o(1)
+// 13. Delete Category Admin time complexity: O(1)
 exports.deleteCategoryAdminRole = (0, catchAsync_1.catchAsync)(async (req, res) => {
     const { id } = req.params;
     if (req.user?.role !== "super-admin") {
@@ -589,35 +652,12 @@ exports.deleteCategoryAdminRole = (0, catchAsync_1.catchAsync)(async (req, res) 
         throw new errorHandler_1.AppError(400, "Super-admin cannot delete themselves!");
     }
     await user_model_1.default.findByIdAndDelete(id);
+    // Invalidate cache
+    await (0, redisCache_1.deleteCache)(`user:${id}`);
+    await (0, redisCache_1.deleteCache)(`users:list:role=category-admin:*`);
     res.status(200).json({
         success: true,
         message: "Category admin deleted successfully!",
-    });
-});
-// 14. Get socket token
-exports.getSocketToken = (0, catchAsync_1.catchAsync)(async (req, res) => {
-    const user = req.user;
-    if (!user) {
-        return res.status(401).json({
-            success: false,
-            message: "Unauthorized: User not authenticated",
-        });
-    }
-    // Generate Socket Token
-    const socketToken = jsonwebtoken_1.default.sign({
-        id: user._id,
-        role: user.role,
-        category: user.category,
-        email: user.email,
-    }, process.env.SOCKET_TOKEN_SECRET || process.env.REFRESH_TOKEN_SECRET, {
-        expiresIn: "24h", // Token valid for 24 hours
-    });
-    res.status(200).json({
-        success: true,
-        data: {
-            socketToken,
-        },
-        message: "Socket token generated successfully",
     });
 });
 //# sourceMappingURL=user.controller.js.map

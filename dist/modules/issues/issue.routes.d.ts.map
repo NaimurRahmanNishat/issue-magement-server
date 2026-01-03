@@ -1,1 +1,1 @@
-{"version":3,"file":"issue.routes.d.ts","sourceRoot":"","sources":["../../../src/modules/issues/issue.routes.ts"],"names":[],"mappings":"AAOA,QAAA,MAAM,MAAM,4CAAW,CAAC;AAUxB,eAAe,MAAM,CAAC"}
+{"version":3,"file":"issue.routes.d.ts","sourceRoot":"","sources":["../../../src/modules/issues/issue.routes.ts"],"names":[],"mappings":"AAqBA,eAAO,MAAM,WAAW,4CAAS,CAAC"}

@@ -1,4 +1,5 @@
 "use strict";
+// src/middleware/validate.middleware.ts
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.validate = void 0;
 const zod_1 = require("zod");
@@ -6,11 +7,6 @@ const catchAsync_1 = require("./catchAsync");
 const errorHandler_1 = require("../utils/errorHandler");
 const validate = (schema) => (0, catchAsync_1.catchAsync)(async (req, res, next) => {
     const dataToValidate = {};
-    /*
-      const dataToValidate= {
-       params: 12345
-      }
-    */
     if (schema.shape.body)
         dataToValidate.body = req.body;
     if (schema.shape.params)

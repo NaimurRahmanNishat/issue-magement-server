@@ -1,3 +1,5 @@
+// src/modules/stats/stats.routes.ts
+
 import { Router } from "express";
 import { adminStats, categoryAdminStats, userStats } from "./stats.controller";
 import { authorizeRole, isAuthenticated } from "../../middleware/auth.middleware";
@@ -14,4 +16,4 @@ router.get("/admin-stats", isAuthenticated, authorizeRole("super-admin"), adminS
 // 3. category-admin stats
 router.get("/category-admin-stats", isAuthenticated, authorizeRole("category-admin"), categoryAdminStats);
 
-export default router;
+export const statsRoutes = router;

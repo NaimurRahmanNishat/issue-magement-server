@@ -1,4 +1,5 @@
 "use strict";
+// src/modules/comments/review.model.ts
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -34,7 +35,6 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.Review = exports.CommentType = void 0;
-// src/modules/comments/review.model.ts
 const mongoose_1 = __importStar(require("mongoose"));
 var CommentType;
 (function (CommentType) {

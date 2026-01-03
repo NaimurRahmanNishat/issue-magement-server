@@ -16,8 +16,6 @@ export interface IUser extends mongoose.Document {
         public_id: string;
         url: string;
     };
-    refreshToken?: string | null;
-    refreshTokenExpiry?: Date | null;
     activationCode?: string | null;
     activationCodeExpiry?: Date | null;
     lastActivationCodeSentAt?: Date | null;

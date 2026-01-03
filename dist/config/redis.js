@@ -13,15 +13,12 @@ if (!config_1.default.redis_url) {
 const redis = new ioredis_1.default(config_1.default.redis_url);
 exports.redis = redis;
 redis.on("connect", () => {
-    console.log("Redis: connected");
-});
-redis.on("ready", () => {
-    console.log("Redis: ready");
+    console.log("✅ Redis connected successfully!");
 });
 redis.on("error", (err) => {
     console.error("Redis error:", err);
 });
 redis.on("close", () => {
-    console.log("Redis: connection closed");
+    console.log("❌ Redis connection closed");
 });
 //# sourceMappingURL=redis.js.map

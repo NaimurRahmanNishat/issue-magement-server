@@ -1,3 +1,5 @@
+// backend/src/helper/senitize.ts
+
 import sanitize from "mongo-sanitize";
 
 export const sanitizeBody = <T extends object>(obj: T): T => {

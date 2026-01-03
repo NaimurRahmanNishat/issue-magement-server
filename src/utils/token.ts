@@ -39,11 +39,3 @@ export const verifyAccessToken = (token: string) => {
 export const verifyRefreshToken = (token: string) => {
   return jwt.verify(token, config.refresh_token_secret!);
 };
-
-
-// update refresh token
-export const updateRefreshToken = (user: IUser, refreshToken: string, expiry: Date):Promise<IUser> => {
-  user.refreshToken = refreshToken;
-  user.refreshTokenExpiry = expiry;
-  return user.save();
-}

@@ -1,6 +1,6 @@
 // src/modules/users/user.controller.ts
-import { Request, Response } from "express";
-import jwt from "jsonwebtoken";
+
+import { NextFunction, Request, Response } from "express";
 import { catchAsync } from "../../middleware/catchAsync";
 import User, { emailRegex, IUser } from "./user.model";
 import { AppError } from "../../utils/errorHandler";
@@ -8,28 +8,29 @@ import bcrypt from "bcryptjs";
 import { AuthRequest } from "../../middleware/auth.middleware";
 import crypto from "crypto";
 import { sendActivationEmail } from "../../utils/email";
-import config from "../../config"; 
 import { redis } from "../../config/redis";
-import { generateAccessToken, generateRefreshToken, updateRefreshToken, verifyRefreshToken } from "../../utils/token";
-import { getCache, invalidateCache, invalidateCacheAsync, setCache } from "../../utils/cache";
-import { USER_CACHE_TTL } from "../../config/cacheConfig";
+import { generateAccessToken, generateRefreshToken, verifyRefreshToken } from "../../utils/token";
 import { setAccessTokenCookie, setAuthCookies } from "../../utils/cookie";
 import { sanitizeBody } from "../../helper/senitize";
-import { deleteImageFromCloudinary, deleteMultipleImagesFromCloudinary, uploadBufferImage, uploadImageBase64 } from "../../utils/UploadImage";
-import { compressImage } from "../../utils/image";
+import { deleteCache, getCache, setCache } from "../../helper/redisCache";
+import { calculateCursorPagination, createCursorPaginationMeta } from "../../helper/cursorPagination";
+import sharp from "sharp";
+import { deleteMultipleImagesFromCloudinary, uploadToCloudinary } from "../../utils/uploadToCloudinary";
 
-// 1. register user complexity o(1)
+
+
+// 1. Register User time complexity: O(1)
 export const register = catchAsync(async (req: AuthRequest, res: Response) => {
   const body = sanitizeBody(req.body);
-  const {name,email,password,confirmPassword,phone,nid,role,category,division} = body as any;
+  const { name, email, password, confirmPassword, phone, nid, role, category, division } = body as any;
 
-  // 1. Password match check
+  // Validate password match
   if (password !== confirmPassword) {
     throw new AppError(400, "Passwords do not match!");
   }
 
-  // 2. Check duplicate email/phone/nid in ONE QUERY
-  const existing = await User.findOne({$or: [{ email }, { phone }, { nid }],}).select("email phone nid");
+  // Check for duplicate email/phone/nid in ONE query
+  const existing = await User.findOne({$or: [{ email }, { phone }, { nid }]}).select("email phone nid").lean();
 
   if (existing) {
     if (existing.email === email) throw new AppError(400, "Email already exists!");
@@ -37,23 +38,34 @@ export const register = catchAsync(async (req: AuthRequest, res: Response) => {
     if (existing.nid === nid) throw new AppError(400, "NID already exists!");
   }
 
-  // 3. First registered user → super-admin
+  // First registered user becomes super-admin
   const userCount = await User.estimatedDocumentCount();
 
   if (userCount === 0) {
-    const hashedPassword = await bcrypt.hash(password, 10);
-    await User.create({name,email,password: hashedPassword,phone,nid,isVerified: true,role: "super-admin"});
+    const hashedPassword = await bcrypt.hash(password, 12);
+    const superAdmin = await User.create({
+      name,
+      email,
+      password: hashedPassword,
+      phone,
+      nid,
+      isVerified: true,
+      role: "super-admin",
+    });
 
     return res.status(201).json({
       success: true,
       message: "Super admin created successfully!",
       data: {
-        message: "Super admin created successfully!",
+        id: superAdmin._id,
+        name: superAdmin.name,
+        email: superAdmin.email,
+        role: superAdmin.role,
       },
     });
   }
 
-  // 4. Category-admin registration (Only super-admin can create)
+  // Category-admin registration (Only super-admin can create)
   if (role === "category-admin") {
     if (!req.user || req.user.role !== "super-admin") {
       throw new AppError(403, "Only super-admin can register category-admins!");
@@ -62,31 +74,52 @@ export const register = catchAsync(async (req: AuthRequest, res: Response) => {
       throw new AppError(400, "Category is required for category-admin!");
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
-    await User.create({name,email,password: hashedPassword,phone,nid,division,role: "category-admin",isVerified: true,category});
+    const hashedPassword = await bcrypt.hash(password, 12);
+    const categoryAdmin = await User.create({
+      name,
+      email,
+      password: hashedPassword,
+      phone,
+      nid,
+      division,
+      role: "category-admin",
+      isVerified: true,
+      category,
+    });
 
     return res.status(201).json({
       success: true,
       message: "Category admin created successfully!",
       data: {
-        message: "Category admin created successfully!",
+        id: categoryAdmin._id,
+        name: categoryAdmin.name,
+        email: categoryAdmin.email,
+        role: categoryAdmin.role,
+        category: categoryAdmin.category,
       },
     });
   }
 
-  // 5. Regular user registration → via activation code
-  const hashedPassword = await bcrypt.hash(password, 10);
+  // Regular user registration with activation code
+  const hashedPassword = await bcrypt.hash(password, 12);
   const activationCode = crypto.randomBytes(3).toString("hex").toUpperCase();
   const activationCodeExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
   // Store user data temporarily in Redis
-  const userData = {name,email,password: hashedPassword,phone,nid,role: "user",activationCode,activationCodeExpiry: activationCodeExpiry.toISOString()};
+  const userData = {
+    name,
+    email,
+    password: hashedPassword,
+    phone,
+    nid,
+    role: "user",
+    activationCode,
+    activationCodeExpiry: activationCodeExpiry.toISOString(),
+  };
 
-  await redis.set(`activation:${email}`,JSON.stringify(userData),"EX",600); // 10 minutes
+  await redis.set(`activation:${email}`, JSON.stringify(userData), "EX", 600);
 
-  // Create activation token
-  const token = jwt.sign({ email, activationCode }, config.jwt_access_secret!, {expiresIn: "15m"} );
-
+  // Send activation email
   try {
     await sendActivationEmail(email, activationCode);
   } catch (error) {
@@ -96,16 +129,16 @@ export const register = catchAsync(async (req: AuthRequest, res: Response) => {
 
   res.status(200).json({
     success: true,
-    message: "Check your email to activate your account.",
+    message: "Registration successful! Check your email to activate your account.",
     data: {
-      message: "Check your email to activate your account.",
+      email,
       expiresIn: "10 minutes",
     },
   });
 });
 
 
-// 2. Activate user account complexity o(1)
+// 2. Activate User Account time complexity: O(1)
 export const activateUser = catchAsync(async (req: Request, res: Response) => {
   const body = sanitizeBody(req.body);
   const { email, activationCode } = body as any;
@@ -149,58 +182,62 @@ export const activateUser = catchAsync(async (req: Request, res: Response) => {
   // Delete from Redis after successful activation
   await redis.del(`activation:${email}`);
 
-  // Generate JWT token for login
-  const token = jwt.sign(
-    { userId: newUser._id, email: newUser.email, role: newUser.role },
-    config.jwt_access_secret!,
-    { expiresIn: "7d" }
-  );
+  // Generate tokens
+  const accessToken = generateAccessToken({ id: newUser._id!.toString(), role: newUser.role });
+  const refreshToken = generateRefreshToken({ id: newUser._id!.toString(), role: newUser.role });
+
+  // Set cookies
+  setAuthCookies(res, accessToken, refreshToken);
+
+  // Cache user data
+  const safeUser = {
+    _id: newUser._id!.toString(),
+    name: newUser.name,
+    email: newUser.email,
+    role: newUser.role,
+    isVerified: newUser.isVerified,
+  };
 
   res.status(201).json({
     success: true,
     message: "Account activated successfully!",
-    data: {
-      token,
-      user: {
-        id: newUser._id,
-        name: newUser.name,
-        email: newUser.email,
-        role: newUser.role,
-      },
-    },
+    data: safeUser,
   });
 });
 
 
-// 3. login user complexity o(1)
+// 3. Login User time complexity: O(1)
 export const login = catchAsync(async (req: Request, res: Response) => {
   const body = sanitizeBody(req.body);
   const { email, password } = body as any;
-  
-  // validation
+
+  // Validation
   if (!email || !emailRegex.test(email)) {
     throw new AppError(400, "Please provide a valid email!");
   }
   if (!password || password.length < 6) {
-    throw new AppError(400, "Password is required!");
+    throw new AppError(400, "Password must be at least 6 characters!");
   }
 
-  const user = await User.findOne({ email }).select("+password");
+  const user = await User.findOne({ email }).select("+password").lean();
   if (!user) throw new AppError(404, "User not found!");
 
   const isMatch = await bcrypt.compare(password, user.password);
   if (!isMatch) throw new AppError(401, "Invalid password!");
 
-  const accessToken = generateAccessToken({ id: user._id, role: user.role });
-  const refreshToken = generateRefreshToken({ id: user._id, role: user.role });
+  // Check if user is verified
+  if (!user.isVerified) {
+    throw new AppError(403, "Please verify your email before logging in!");
+  }
 
-  // Refresh token to database save (cookie not set)
-  const expiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-  await updateRefreshToken(user as IUser, refreshToken, expiry);
+  // Generate tokens
+  const accessToken = generateAccessToken({ id: user._id!.toString(), role: user.role });
+  const refreshToken = generateRefreshToken({ id: user._id!.toString(), role: user.role });
 
-  //  access token cookie set
+  // Set cookies
   setAuthCookies(res, accessToken, refreshToken);
 
+  // Prepare safe user data
   const safeUser = {
     _id: user._id!.toString(),
     name: user.name,
@@ -213,10 +250,8 @@ export const login = catchAsync(async (req: Request, res: Response) => {
     profession: user.profession,
     division: user.division,
     nidPic: user.nidPic,
-    avatar: user.avatar
+    avatar: user.avatar,
   };
-
-  await setCache(`user:${user._id}`, safeUser, USER_CACHE_TTL);
 
   res.status(200).json({
     success: true,
@@ -226,97 +261,54 @@ export const login = catchAsync(async (req: Request, res: Response) => {
 });
 
 
-// 4. refresh token complexity o(1)
+// 4. Refresh Access Token time complexity: O(1)
 export const refreshToken = catchAsync(async (req: Request, res: Response) => {
-  const body = sanitizeBody(req.body);
-  const userId = body.userId; // Frontend from userId send
+  const oldRefreshToken = req.cookies?.refreshToken;
 
-  if (!userId) {
-    throw new AppError(401, "User ID is required!");
+  if (!oldRefreshToken) {
+    throw new AppError(401, "Refresh token missing");
   }
 
-  // Database from user and refresh token fetch
-  const user = await User.findById(userId).select(
-    "+refreshToken +refreshTokenExpiry"
-  );
-
-    if (!user || !user.refreshToken || !user.refreshTokenExpiry) {
-    throw new AppError(401, "No refresh token found. Please login again.");
-  }
-
-  // Check if refresh token expired
-  if (new Date() > user.refreshTokenExpiry) {
-    // Expired token clear
-    user.refreshToken = null;
-    user.refreshTokenExpiry = null;
-    await user.save();
-    throw new AppError(401, "Refresh token expired. Please login again.");
-  }
-
-  // Verify refresh token
+  let decoded: any;
   try {
-    const decoded = verifyRefreshToken(user.refreshToken) as {
-      id: string;
-      role: string;
-    };
-
-    // Security check: decoded id must match userId
-    if (decoded.id !== userId) {
-      throw new AppError(401, "Invalid token");
-    }
-
-    // Generate new access token
-    const accessToken = generateAccessToken({ id: user._id, role: user.role });
-
-    // Update access token cookie
-    setAccessTokenCookie(res, accessToken);
-
-    // Response 
-    const safeUser = {
-    _id: user._id!.toString(),
-    name: user.name,
-    email: user.email,
-    role: user.role,
-    category: user.category,
-    isVerified: user.isVerified,
-    phone: user.phone,
-    zipCode: user.zipCode,
-    profession: user.profession,
-    division: user.division,
-    nidPic: user.nidPic,
-    avatar: user.avatar
-    };
-
-    // Update cache
-    await setCache(`user:${user._id}`, safeUser, USER_CACHE_TTL);
-
-    res.status(200).json({
-      success: true,
-      message: "Access token refreshed successfully!",
-      data: safeUser,
-    });
-  } catch (error) {
-    // Invalid token - clear from database
-    await User.updateOne({ _id: userId },{ $set: { refreshToken: null, refreshTokenExpiry: null } });
-    throw new AppError(401, "Invalid refresh token. Please login again.");
+    decoded = verifyRefreshToken(oldRefreshToken);
+  } catch {
+    throw new AppError(401, "Invalid refresh token");
   }
+
+  const user = await User.findById(decoded.id).select("role").lean();
+  if (!user) {
+    throw new AppError(401, "User no longer exists");
+  }
+
+  // Generate new access token
+  const newAccessToken = generateAccessToken({ id: decoded.id, role: user.role });
+
+  // Update access token cookie
+  setAccessTokenCookie(res, newAccessToken);
+
+  res.status(200).json({
+    success: true,
+    message: "Access token refreshed successfully",
+  });
 });
 
 
-// 5. logout complexity o(1)
+// 5. Logout User time complexity: O(1)
 export const logout = catchAsync(async (req: AuthRequest, res: Response) => {
   const userId = req.user?._id;
-  if (userId) {
-    // Redis from refresh token & user state delete 
-    await redis.del(`refresh_token:${userId}`);
 
-    // user cache invalidate (delete from cache)
-    await invalidateCache(userId.toString());
-  }
-
-  // Cookies clear (explicit options)
-  res.clearCookie("accessToken");
-  res.clearCookie("refreshToken");
+  // Clear cookies
+  res.clearCookie("accessToken", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
+  });
+  res.clearCookie("refreshToken", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
+  });
 
   res.status(200).json({
     success: true,
@@ -325,7 +317,7 @@ export const logout = catchAsync(async (req: AuthRequest, res: Response) => {
 });
 
 
-// 6. Forget Password (OTP Based) complexity o(1)
+// 6. Forget Password (OTP Based) time complexity: O(1)
 export const forgetPassword = catchAsync(async (req: Request, res: Response) => {
   const body = sanitizeBody(req.body);
   const { email } = body as any;
@@ -335,11 +327,11 @@ export const forgetPassword = catchAsync(async (req: Request, res: Response) => 
   const user = await User.findOne({ email });
   if (!user) throw new AppError(404, "User not found!");
 
-  // 6 digit OTP
+  // Generate 6-digit OTP
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
   user.resetPasswordOtp = otp;
-  user.resetPasswordOtpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 min expire
+  user.resetPasswordOtpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
   await user.save({ validateBeforeSave: false });
 
   try {
@@ -354,35 +346,43 @@ export const forgetPassword = catchAsync(async (req: Request, res: Response) => 
   res.status(200).json({
     success: true,
     message: "Password reset OTP sent successfully to your email.",
+    data: {
+      email,
+      expiresIn: "10 minutes",
+    },
   });
 });
 
 
-// 7. Reset Password complexity o(1)
+// 7. Reset Password time complexity: O(1)
 export const resetPassword = catchAsync(async (req: Request, res: Response) => {
   const body = sanitizeBody(req.body);
   const { otp, newPassword } = body as any;
 
-  if (!otp || !newPassword)
+  if (!otp || !newPassword) {
     throw new AppError(400, "OTP and new password are required!");
+  }
 
-  // find user by OTP
+  if (newPassword.length < 6) {
+    throw new AppError(400, "Password must be at least 6 characters!");
+  }
+
+  // Find user by OTP
   const user = await User.findOne({
     resetPasswordOtp: otp,
     resetPasswordOtpExpiry: { $gt: new Date() },
-  }).select("+password");
+  });
 
   if (!user) throw new AppError(400, "Invalid or expired OTP!");
 
-  // update password
-  user.password = newPassword;
+  // Hash new password
+  user.password = await bcrypt.hash(newPassword, 12);
   user.resetPasswordOtp = null;
   user.resetPasswordOtpExpiry = null;
   await user.save();
 
-  // Redis Cache update
-  const userWithoutPassword = { ...user.toObject(), password: undefined };
-  await setCache(user._id!.toString(), userWithoutPassword, USER_CACHE_TTL);
+  // Invalidate user cache
+  await deleteCache(`user:${user._id}`);
 
   res.status(200).json({
     success: true,
@@ -391,248 +391,305 @@ export const resetPassword = catchAsync(async (req: Request, res: Response) => {
 });
 
 
-// 8. edit profile by id complexity o(1)
+// 8. Edit Profile by ID time complexity: O(n)
 export const editProfileById = catchAsync(async (req: AuthRequest, res: Response) => {
   const userId = req.user?._id;
   if (!userId) throw new AppError(401, "Unauthorized");
 
-  const {name,email,phone,zipCode,profession,division,avatar,nidPic} = req.body;
+  const { name, email, phone, zipCode, profession, division } = req.body;
 
   const existingUser = await User.findById(userId);
   if (!existingUser) throw new AppError(404, "User not found");
 
-  const updateData: Partial<IUser> = {};
+  const updateData: any = {};
 
-  /* ==========================
-    BASIC FIELDS
-  ========================== */
-    if (name) updateData.name = name;
-    if (email) updateData.email = email;
-    if (phone) updateData.phone = phone;
-    if (zipCode) updateData.zipCode = zipCode;
-    if (profession) updateData.profession = profession;
-    if (division) updateData.division = division;
+  // ================= BASIC FIELDS =================
+  if (name) updateData.name = name;
+  if (email) updateData.email = email;
+  if (phone) updateData.phone = phone;
+  if (zipCode) updateData.zipCode = zipCode;
+  if (profession) updateData.profession = profession;
+  if (division) updateData.division = division;
 
-  /* ==========================
-    AVATAR (SINGLE IMAGE)
-  ========================== */
-  let newAvatar: IUser["avatar"] | undefined;
+  // ================= AVATAR (SINGLE IMAGE) =================
+  const avatarFile = (req.files as any)?.avatar?.[0];
 
-  // Case 1: multipart/form-data (single file upload)
-  if (req.files && (req.files as any).avatar?.[0]) {
-    const file = (req.files as any).avatar[0] as Express.Multer.File;
+  if (avatarFile) {
+    const avatarBuffer = await sharp(avatarFile.buffer)
+      .resize(500, 500)
+      .webp({ quality: 70 })
+      .toBuffer();
 
-    console.log("📸 Uploading new avatar...");
-    console.log(`Original size: ${(file.size / 1024).toFixed(2)} KB`);
+    const avatarUpload = await uploadToCloudinary(
+      avatarBuffer,
+      "users/avatar"
+    );
 
-    // Compress image
-    const compressed = await compressImage(file.buffer);
-    console.log(`Compressed size: ${(compressed.length / 1024).toFixed(2)} KB`);
+    updateData.avatar = {
+      public_id: avatarUpload.public_id,
+      url: avatarUpload.secure_url,
+    };
 
-    // Upload to Cloudinary
-    newAvatar = await uploadBufferImage(compressed, "user-avatars");
-    console.log(`✅ Avatar uploaded: ${newAvatar.url}`);
-  }
-
-  // Case 2: base64 fallback
-  else if (typeof avatar === "string" && avatar.startsWith("data:image/")) {
-    console.log("📸 Uploading base64 avatar...");
-    newAvatar = await uploadImageBase64(avatar, "user-avatars");
-    console.log(`✅ Avatar uploaded: ${newAvatar.url}`);
-  }
-
-  // If new avatar uploaded, update and delete old
-  if (newAvatar) {
-    updateData.avatar = newAvatar;
-
-    // Delete old avatar from Cloudinary
+    // delete old avatar
     if (
       existingUser.avatar?.public_id &&
-      existingUser.avatar.public_id.startsWith("user-avatars/")
+      existingUser.avatar.public_id.startsWith("users/avatar")
     ) {
-      console.log(`🗑️ Deleting old avatar: ${existingUser.avatar.public_id}`);
-      await deleteImageFromCloudinary(existingUser.avatar.public_id).catch(() => {
-        console.warn("Failed to delete old avatar");
-      });
-      }
-    }
-  
-  /* ==========================
-    NID PICTURES (MULTIPLE)
-  ========================== */
-  let newNidPics: { public_id: string; url: string }[] = [];
-
-  // Case 1: multipart/form-data (multiple files)
-  if (req.files && (req.files as any).nidPic) {
-    const files = (req.files as any).nidPic as Express.Multer.File[];
-
-    console.log(`📸 Uploading ${files.length} NID pictures...`);
-
-    newNidPics = await Promise.all(
-      files.map(async (file, index) => {
-        console.log(`Processing NID ${index + 1}/${files.length}...`);
-        console.log(`Original: ${(file.size / 1024).toFixed(2)} KB`);
-
-        const compressed = await compressImage(file.buffer);
-        console.log(`Compressed: ${(compressed.length / 1024).toFixed(2)} KB`);
-
-        const uploaded = await uploadBufferImage(compressed, "user-nid");
-        console.log(`✅ Uploaded: ${uploaded.url}`);
-
-        return uploaded;
-      })
-    );
-  }
-
-  // Case 2: base64 fallback (multiple images)
-  else if (Array.isArray(nidPic) && nidPic.length > 0) {
-    const base64Images = nidPic.filter(
-      (img) => typeof img === "string" && img.startsWith("data:image/")
-    );
-
-    if (base64Images.length > 0) {
-      console.log(`📸 Uploading ${base64Images.length} base64 NID pictures...`);
-
-      newNidPics = await Promise.all(
-        base64Images.map(async (img, index) => {
-          console.log(`Processing NID ${index + 1}/${base64Images.length}...`);
-          const uploaded = await uploadImageBase64(img, "user-nid");
-          console.log(`✅ Uploaded: ${uploaded.url}`);
-          return uploaded;
-        })
-      );
+      await deleteMultipleImagesFromCloudinary([
+        existingUser.avatar.public_id,
+      ]).catch(() => {});
     }
   }
 
-  // If new NID pics uploaded, update and delete old
-  if (newNidPics.length > 0) {
-    updateData.nidPic = newNidPics;
+  // ================= NID PICTURES (MULTIPLE) =================
+  const nidFiles = (req.files as any)?.nidPic as Express.Multer.File[];
 
-    // Delete old NID images from Cloudinary
+  if (nidFiles && nidFiles.length > 0) {
+    if (nidFiles.length > 3) {
+      throw new AppError(400, "Maximum 3 NID images allowed");
+    }
+
+    const compressedBuffers = await Promise.all(
+      nidFiles.map((file) =>
+        sharp(file.buffer)
+          .resize({ width: 1200 })
+          .webp({ quality: 65 })
+          .toBuffer()
+      )
+    );
+
+    const uploads = await Promise.all(
+      compressedBuffers.map((buffer) =>
+        uploadToCloudinary(buffer, "users/nid")
+      )
+    );
+
+    updateData.nidPic = uploads.map((img) => ({
+      public_id: img.public_id,
+      url: img.secure_url,
+    }));
+
+    // delete old nid images
     if (existingUser.nidPic?.length) {
       const oldIds = existingUser.nidPic
-        .filter((p) => p.public_id.startsWith("user-nid/"))
-        .map((p) => p.public_id);
+        .filter((i) => i.public_id.startsWith("users/nid"))
+        .map((i) => i.public_id);
 
       if (oldIds.length) {
-        console.log(`🗑️ Deleting ${oldIds.length} old NID pictures...`);
-        await deleteMultipleImagesFromCloudinary(oldIds).catch(() => {
-          console.warn("Failed to delete old NID pictures");
-        });
+        await deleteMultipleImagesFromCloudinary(oldIds).catch(() => {});
       }
     }
   }
 
-  // Check if there's anything to update
   if (Object.keys(updateData).length === 0) {
     throw new AppError(400, "No valid fields to update");
   }
 
-  // Update user in database
   const updatedUser = await User.findByIdAndUpdate(userId, updateData, {
     new: true,
     runValidators: true,
-    select: "-password -refreshToken -activationCode -resetPasswordOtp -refreshTokenExpiry",
+    select: "-password -activationCode -resetPasswordOtp",
   });
 
-    res.status(200).json({
-      success: true,
-      message: "Profile updated successfully",
-      data: updatedUser,
-    });
-  }
-);
+  res.status(200).json({
+    success: true,
+    message: "Profile updated successfully",
+    data: updatedUser,
+  });
+});
 
-
-// 9. get user profile by id complexity o(1)
+// 9. Get User Profile by ID time complexity: O(1)
 export const getProfileById = catchAsync(async (req: AuthRequest, res: Response) => {
   const userId = req.user?._id;
   if (!userId) throw new AppError(401, "Unauthorized");
 
-  const user = await User.findById(userId).select(
-    "-password -refreshToken -refreshTokenExpiry -activationCode -activationCodeExpiry -resetPasswordOtp -resetPasswordOtpExpiry"
-  );
+  // Try cache first
+  const cacheKey = `user:${userId}`;
+  try {
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      console.log(`⚡ Cache hit: ${cacheKey}`);
+      return res.status(200).json({
+        success: true,
+        message: "Profile fetched (from cache)",
+        data: cached,
+      });
+    }
+  } catch (cacheError) {
+    console.error("Cache retrieval error:", cacheError);
+  }
+
+  const user = await User.findById(userId)
+    .select("-password -refreshToken -refreshTokenExpiry -activationCode -activationCodeExpiry -resetPasswordOtp -resetPasswordOtpExpiry")
+    .lean();
 
   if (!user) throw new AppError(404, "User not found");
 
   res.status(200).json({
     success: true,
-    message: "Profile fetched successfully!",
+    message: "Profile fetched successfully",
     data: user,
   });
 });
 
 
-// 10. get all normal users (only super-admin and category-admin can access) complexity o(n)
+// 10. Get All Users (Cursor Pagination) time complexity: O(n)
 export const getAllUsers = catchAsync(async (req: AuthRequest, res: Response) => {
   const role = req.user?.role;
+
   if (role !== "category-admin" && role !== "super-admin") {
     throw new AppError(403, "You are not authorized to access user list!");
   }
 
-  const page = Math.max(Number(req.query.page) || 1, 1);
-  const limit = Math.min(Number(req.query.limit) || 10, 50);
-  const skip = (page - 1) * limit;
+  const { cursor, limit = 10, sortOrder = "desc" } = req.query;
 
-  const cacheKey = `users:list:role=user:page=${page}:limit=${limit}`;
+  const cacheKey = `users:list:role=user:${cursor || 'first'}:${limit}:${sortOrder}`;
 
-  // ✅ CACHE READ
-  const cached = await getCache(cacheKey);
-  if (cached) {
-    return res.status(200).json({
-      success: true,
-      message: "User list fetched from cache",
-      ...cached,
-    });
+  // Try cache first
+  try {
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      console.log(`⚡ Cache hit: ${cacheKey}`);
+      return res.status(200).json({
+        success: true,
+        message: "User list fetched (from cache)",
+        ...cached,
+      });
+    }
+  } catch (cacheError) {
+    console.error("Cache retrieval error:", cacheError);
   }
 
-  // ✅ Parallel DB queries
-  const [totalUsers, users] = await Promise.all([
-    User.countDocuments({ role: "user" }),
-    User.find({ role: "user" })
-      .select("-password -refreshToken -refreshTokenExpiry -activationCode -activationCodeExpiry -resetPasswordOtp -resetPasswordOtpExpiry")
-      .skip(skip)
-      .limit(limit)
-      .lean(),
-  ]);
+  // Calculate cursor pagination
+  const paginationOptions = calculateCursorPagination({
+    limit: parseInt(limit as string),
+    cursor: cursor as string,
+    sortBy: 'createdAt',
+    sortOrder: sortOrder as "asc" | "desc",
+  });
 
-  const payload = { totalUsers, data: users };
+  // Build query
+  const query = {
+    role: "user",
+    ...paginationOptions.filter,
+  };
 
-  // ✅ CACHE WRITE
-  await setCache(cacheKey, payload, 600); // 10 min TTL
+  // Fetch users
+  const users = await User.find(query)
+    .select("-password -refreshToken -refreshTokenExpiry -activationCode -activationCodeExpiry -resetPasswordOtp -resetPasswordOtpExpiry")
+    .sort({ [paginationOptions.sortBy]: paginationOptions.sortOrder === 'asc' ? 1 : -1 })
+    .limit(paginationOptions.limit + 1)
+    .lean();
+
+  // Create pagination metadata
+  const { data, meta } = createCursorPaginationMeta(
+    users,
+    paginationOptions.limit,
+    paginationOptions.sortBy,
+    paginationOptions.sortOrder
+  );
+
+  // Get total count
+  const total = await User.countDocuments({ role: "user" });
+
+  const responseData = {
+    data,
+    meta: {
+      ...meta,
+      total,
+    },
+  };
+
+  // Cache for 10 minutes
+  await setCache(cacheKey, responseData, 600);
 
   res.status(200).json({
     success: true,
     message: "User list fetched successfully",
-    ...payload,
+    ...responseData,
   });
 });
 
 
-// 11. get all category admin complexity o(n)
+// 11. Get All Category Admins (Cursor Pagination) time complexity: O(n)
 export const getAllCategoryAdmins = catchAsync(async (req: AuthRequest, res: Response) => {
   const role = req.user?.role;
-  const page = parseInt(req.query.page as string) || 1;
-  const limit = parseInt(req.query.limit as string) || 10;
 
   if (role !== "super-admin") {
     throw new AppError(403, "You are not authorized to access category admin list!");
   }
 
-  const totalCategoryAdmins = await User.countDocuments({ role: "category-admin" });
+  const { cursor, limit = 10, sortOrder = "desc" } = req.query;
 
-  const categoryAdmins = await User.find({ role: "category-admin" }).skip((page - 1) * limit).limit(limit).select("-password -refreshToken -refreshTokenExpiry -activationCode -activationCodeExpiry -resetPasswordOtp -resetPasswordOtpExpiry");
+  const cacheKey = `users:list:role=category-admin:${cursor || 'first'}:${limit}:${sortOrder}`;
+
+  // Try cache first
+  try {
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      console.log(`⚡ Cache hit: ${cacheKey}`);
+      return res.status(200).json({
+        success: true,
+        message: "Category admin list fetched (from cache)",
+        ...cached,
+      });
+    }
+  } catch (cacheError) {
+    console.error("Cache retrieval error:", cacheError);
+  }
+
+  // Calculate cursor pagination
+  const paginationOptions = calculateCursorPagination({
+    limit: parseInt(limit as string),
+    cursor: cursor as string,
+    sortBy: 'createdAt',
+    sortOrder: sortOrder as "asc" | "desc",
+  });
+
+  // Build query
+  const query = {
+    role: "category-admin",
+    ...paginationOptions.filter,
+  };
+
+  // Fetch category admins
+  const categoryAdmins = await User.find(query)
+    .select("-password -refreshToken -refreshTokenExpiry -activationCode -activationCodeExpiry -resetPasswordOtp -resetPasswordOtpExpiry")
+    .sort({ [paginationOptions.sortBy]: paginationOptions.sortOrder === 'asc' ? 1 : -1 })
+    .limit(paginationOptions.limit + 1)
+    .lean();
+
+  // Create pagination metadata
+  const { data, meta } = createCursorPaginationMeta(
+    categoryAdmins,
+    paginationOptions.limit,
+    paginationOptions.sortBy,
+    paginationOptions.sortOrder
+  );
+
+  // Get total count
+  const total = await User.countDocuments({ role: "category-admin" });
+
+  const responseData = {
+    data,
+    meta: {
+      ...meta,
+      total,
+    },
+  };
+
+  // Cache for 10 minutes
+  await setCache(cacheKey, responseData, 600);
 
   res.status(200).json({
     success: true,
     message: "Category admin list fetched successfully",
-    totalCategoryAdmins,
-    data: categoryAdmins,
+    ...responseData,
   });
 });
 
 
-// 12. update category admin role complexity o(1)
+// 12. Update Category Admin Role time complexity: O(1)
 export const updateCategoryAdminRole = catchAsync(async (req: AuthRequest, res: Response) => {
   const { id } = req.params;
   const { category, division } = req.body;
@@ -651,24 +708,30 @@ export const updateCategoryAdminRole = catchAsync(async (req: AuthRequest, res: 
   }
 
   // Update fields
-  user.category = category ?? user.category;
-  user.division = division ?? user.division;
+  if (category) user.category = category;
+  if (division) user.division = division;
 
   await user.save();
 
+  // Invalidate cache
+  await deleteCache(`user:${id}`);
+  await deleteCache(`users:list:role=category-admin:*`);
+
   res.status(200).json({
     success: true,
-    message: "Category admin role updated successfully!",
+    message: "Category admin updated successfully!",
     data: {
       id: user._id,
+      name: user.name,
+      email: user.email,
       category: user.category,
       division: user.division,
-    }
+    },
   });
 });
 
 
-// 13. delete category admin role complexity o(1)
+// 13. Delete Category Admin time complexity: O(1)
 export const deleteCategoryAdminRole = catchAsync(async (req: AuthRequest, res: Response) => {
   const { id } = req.params;
 
@@ -689,43 +752,12 @@ export const deleteCategoryAdminRole = catchAsync(async (req: AuthRequest, res: 
 
   await User.findByIdAndDelete(id);
 
+  // Invalidate cache
+  await deleteCache(`user:${id}`);
+  await deleteCache(`users:list:role=category-admin:*`);
+
   res.status(200).json({
     success: true,
     message: "Category admin deleted successfully!",
   });
 });
-
-
-// 14. Get socket token
-export const getSocketToken = catchAsync(async (req: Request, res: Response) => {
-  const user = (req as any).user!;
-  if (!user) {
-    return res.status(401).json({
-      success: false,
-      message: "Unauthorized: User not authenticated",
-    });
-  }
-
-  // Generate Socket Token
-  const socketToken = jwt.sign(
-    {
-      id: user._id,
-      role: user.role,
-      category: user.category,
-      email: user.email,
-    },
-    process.env.SOCKET_TOKEN_SECRET || process.env.REFRESH_TOKEN_SECRET!,
-    {
-      expiresIn: "24h", // Token valid for 24 hours
-    }
-  );
-
-  res.status(200).json({
-    success: true,
-    data: {
-      socketToken,
-    },
-    message: "Socket token generated successfully",
-  });
-});
-

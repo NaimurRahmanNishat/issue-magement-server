@@ -1,24 +1,11 @@
 // src/modules/users/user.model.ts
-// note: nidPic এর ফ্রন্ট সাইড এন্ড ব্যাক সাইড এর ইমেজ আপলোড হবে 
+
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
 
 export type Role = "user" | "category-admin" | "super-admin";
-export type CategoryType =
-  | "broken_road"
-  | "water"
-  | "gas"
-  | "electricity"
-  | "other";
-export type Division =
-  | "Dhaka"
-  | "Chattogram"
-  | "Rajshahi"
-  | "Khulna"
-  | "Barishal"
-  | "Sylhet"
-  | "Rangpur"
-  | "Mymensingh";
+export type CategoryType = "broken_road" | "water" | "gas" | "electricity" | "other";
+export type Division = "Dhaka" | "Chattogram" | "Rajshahi" | "Khulna" | "Barishal" | "Sylhet" | "Rangpur" | "Mymensingh";
 
 export interface IUser extends mongoose.Document {
   name: string;
@@ -31,8 +18,6 @@ export interface IUser extends mongoose.Document {
   category?: CategoryType;
   division?: Division;
   avatar?: { public_id: string; url: string };
-  refreshToken?: string | null;
-  refreshTokenExpiry?: Date | null;
   activationCode?: string | null;
   activationCodeExpiry?: Date | null;
   lastActivationCodeSentAt?: Date | null;
@@ -105,16 +90,7 @@ const userSchema = new mongoose.Schema<IUser>(
     },
     division: {
       type: String,
-      enum: [
-        "Dhaka",
-        "Chattogram",
-        "Rajshahi",
-        "Khulna",
-        "Barishal",
-        "Sylhet",
-        "Rangpur",
-        "Mymensingh",
-      ],
+      enum: [ "Dhaka", "Chattogram", "Rajshahi", "Khulna", "Barishal", "Sylhet", "Rangpur", "Mymensingh" ],
     },
     avatar: {
       public_id: { type: String, default: "default_avatar" },
@@ -124,8 +100,6 @@ const userSchema = new mongoose.Schema<IUser>(
           "https://icons8.com/icons/set/user",
       },
     },
-    refreshToken: { type: String, default: null, select: false },
-    refreshTokenExpiry: { type: Date, default: null, select: false },
     activationCode: { type: String, default: null, select: false },
     activationCodeExpiry: { type: Date, default: null, select: false },
     lastActivationCodeSentAt: { type: Date, default: null, select: false },
@@ -148,19 +122,16 @@ const userSchema = new mongoose.Schema<IUser>(
   }
 );
 
-
   userSchema.pre("save", async function (next) {
     if (!this.isModified("password")) return next();
-    if (this.password.startsWith("$2")) return next(); // already hashed
+    if (this.password.startsWith("$2")) return next(); 
     this.password = await bcrypt.hash(this.password, 10);
     next();
   });
-
 
   userSchema.methods.comparePassword = async function (password: string) {
     return await bcrypt.compare(password, this.password);
   };
 
 const User = mongoose.model<IUser>("User", userSchema);
-
 export default User;

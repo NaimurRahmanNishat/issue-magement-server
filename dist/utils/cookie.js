@@ -1,4 +1,5 @@
 "use strict";
+// src/utils/cookie.ts
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -17,7 +18,7 @@ const setCookie = (res, name, token, maxAge) => {
     res.cookie(name, token, cookieOptions);
 };
 const setAuthCookies = (res, accessToken, refreshToken) => {
-    setCookie(res, "accessToken", accessToken, 1 * 60 * 1000); // 10 minute
+    setCookie(res, "accessToken", accessToken, 10 * 60 * 1000); // 10 minutes
     setCookie(res, "refreshToken", refreshToken, 7 * 24 * 60 * 60 * 1000); // 7 days
 };
 exports.setAuthCookies = setAuthCookies;
@@ -26,7 +27,8 @@ const setAccessTokenCookie = (res, accessToken) => {
         httpOnly: true,
         secure: isProduction,
         sameSite: isProduction ? "none" : "lax",
-        maxAge: 1 * 60 * 1000, // 10 minute
+        maxAge: 10 * 60 * 1000, // 10 minutes
+        path: "/",
     });
 };
 exports.setAccessTokenCookie = setAccessTokenCookie;

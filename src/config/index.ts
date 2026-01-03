@@ -21,6 +21,7 @@ interface Config {
     cloudinary_cloud_name: string;
     cloudinary_api_key: string;
     cloudinary_api_secret: string;
+    socket_token_secret?: string;
 }
 
 const config = {
@@ -42,6 +43,7 @@ const config = {
     cloudinary_cloud_name: process.env.CLOUDINARY_CLOUD_NAME || "",
     cloudinary_api_key: process.env.CLOUDINARY_API_KEY || "",
     cloudinary_api_secret: process.env.CLOUDINARY_API_SECRET || "",
+    socket_token_secret: process.env.SOCKET_TOKEN_SECRET || "",
 };
 
 export default config;

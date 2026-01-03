@@ -1,11 +1,10 @@
 "use strict";
+// src/modules/users/user.model.ts
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.nidRegex = exports.phoneRegex = exports.emailRegex = void 0;
-// src/modules/users/user.model.ts
-// note: nidPic এর ফ্রন্ট সাইড এন্ড ব্যাক সাইড এর ইমেজ আপলোড হবে 
 const mongoose_1 = __importDefault(require("mongoose"));
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
 exports.emailRegex = /^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$/;
@@ -65,16 +64,7 @@ const userSchema = new mongoose_1.default.Schema({
     },
     division: {
         type: String,
-        enum: [
-            "Dhaka",
-            "Chattogram",
-            "Rajshahi",
-            "Khulna",
-            "Barishal",
-            "Sylhet",
-            "Rangpur",
-            "Mymensingh",
-        ],
+        enum: ["Dhaka", "Chattogram", "Rajshahi", "Khulna", "Barishal", "Sylhet", "Rangpur", "Mymensingh"],
     },
     avatar: {
         public_id: { type: String, default: "default_avatar" },
@@ -83,8 +73,6 @@ const userSchema = new mongoose_1.default.Schema({
             default: "https://icons8.com/icons/set/user",
         },
     },
-    refreshToken: { type: String, default: null, select: false },
-    refreshTokenExpiry: { type: Date, default: null, select: false },
     activationCode: { type: String, default: null, select: false },
     activationCodeExpiry: { type: Date, default: null, select: false },
     lastActivationCodeSentAt: { type: Date, default: null, select: false },
@@ -108,7 +96,7 @@ userSchema.pre("save", async function (next) {
     if (!this.isModified("password"))
         return next();
     if (this.password.startsWith("$2"))
-        return next(); // already hashed
+        return next();
     this.password = await bcryptjs_1.default.hash(this.password, 10);
     next();
 });

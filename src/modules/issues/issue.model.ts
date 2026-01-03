@@ -1,4 +1,5 @@
 // src/modules/issues/issue.model.ts
+
 import mongoose, { Schema, Document, Types } from "mongoose";
 import "../comments/review.model"; 
 
@@ -15,8 +16,10 @@ export enum BangladeshDivision {
 
 export enum IssueStatus {
   PENDING = "pending",
+  APPROVED = "approved",
   IN_PROGRESS = "in-progress",
-  SOLVED = "solved",
+  RESOLVED = "resolved",
+  REJECTED = "rejected"
 }
 
 export enum IssueCategory {
@@ -43,6 +46,8 @@ export interface IIssue extends Document {
   date: Date;
   approvedBy?: Types.ObjectId;
   approvedAt?: Date;
+  isReadByAdmin?: boolean;  
+  readByAdminAt?: Date;     
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -67,15 +72,12 @@ const issueSchema = new Schema<IIssue>(
       trim: true,
       minlength: [10, "Description must be at least 10 characters long"],
     },
-    images: {
-      type: [
-        {
-          public_id: { type: String },
-          url: { type: String, required: true },
-        },
-      ],
-      default: [],
-    },
+    images: [
+      {
+        public_id: { type: String, required: true },
+        url: { type: String, required: true },
+      },
+    ],
     location: {
       type: String,
       required: [true, "Location is required"],
@@ -96,6 +98,8 @@ const issueSchema = new Schema<IIssue>(
     date: { type: Date, default: Date.now },
     approvedBy: { type: Schema.Types.ObjectId, ref: "User" },
     approvedAt: { type: Date },
+    isReadByAdmin: { type: Boolean, default: false }, 
+    readByAdminAt: { type: Date },  
   },
   { timestamps: true }
 );

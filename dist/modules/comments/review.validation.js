@@ -1,7 +1,7 @@
 "use strict";
+// src/modules/comments/review.validation.ts
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.createReviewSchema = void 0;
-// src/modules/comments/review.validation.ts
 const zod_1 = require("zod");
 // 1. create review validation  
 exports.createReviewSchema = zod_1.z.object({
