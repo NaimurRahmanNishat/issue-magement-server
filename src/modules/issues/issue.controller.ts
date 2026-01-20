@@ -151,20 +151,7 @@ export const getAllIssues = catchAsync(async (req: AuthRequest, res: Response) =
   // Generate cache key with all filters
   const cacheKey = `issues:${user?._id || 'public'}:${user?.role || 'guest'}:${user?.category || 'all'}:${cursor || 'first'}:${limit}:${sortOrder}:${status || 'all'}:${division || 'all'}:${category || 'all'}:${search || 'none'}`;
   
-  // Try cache first
-  try {
-    const cachedData = await getCache(cacheKey);
-    if (cachedData) {
-      console.log(`⚡ Cache hit: ${cacheKey}`);
-      return res.status(200).json({
-        success: true,
-        message: "Issues fetched (from cache)",
-        ...cachedData,
-      });
-    }
-  } catch (cacheError) {
-    console.error("Cache retrieval error:", cacheError);
-  }
+  await getCache(cacheKey);
 
   // Calculate cursor pagination
   const paginationOptions = calculateCursorPagination({
@@ -177,7 +164,7 @@ export const getAllIssues = catchAsync(async (req: AuthRequest, res: Response) =
   // Combine filters with cursor pagination
   const finalQuery = {
     ...query,
-    ...paginationOptions.filter,
+    ...paginationOptions.filter, 
   };
 
   // Query database with pagination

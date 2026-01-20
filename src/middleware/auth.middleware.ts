@@ -5,31 +5,21 @@ import config from "../config";
 import { AppError } from "../utils/errorHandler";
 import { getCache, setCache } from "../helper/redisCache";
 
-
 export interface AuthRequest extends Request {
   user?: IUser;
 }
 
-
-
 // Authentication middleware
-export const isAuthenticated = async (req: AuthRequest, res: Response, next: NextFunction) => {
+export const isAuthenticated = async ( req: AuthRequest, res: Response, next: NextFunction ) => {
   const token = req.cookies?.accessToken || req.headers.authorization?.split("Bearer ")[1];
   if (!token) return next(new AppError(401, "Access token missing"));
 
   let decoded;
   try {
     decoded = jwt.verify(token, config.jwt_access_secret!) as { id: string };
-    // 1. try to get user from cache
-    let user = await getCache(`user:${decoded.id}`);
-    if (!user) {
-      // 2. fallback to DB
-      const userDoc = await User.findById(decoded.id).select("-password");
-      if (!userDoc) return next(new AppError(404, "User not found"));
-      user = userDoc.toObject();
-      // 3. store in cache for next time
-      await setCache(`user:${decoded.id}`, user);
-    }
+    const userDoc = await User.findById(decoded.id).select("-password");
+    if (!userDoc) return next(new AppError(404, "User not found"));
+    let user = userDoc.toObject();
     req.user = user;
     next();
   } catch {
@@ -47,14 +37,15 @@ export const authorizeRole = (...roles: string[]) => {
   };
 };
 
-
 // Optional authentication middleware
-export const optionalAuth = async (req: AuthRequest, res: Response, next: NextFunction) => {
+export const optionalAuth = async ( req: AuthRequest, res: Response, next: NextFunction ) => {
   const token = req.cookies?.accessToken;
   if (!token) return next(); // no token, skip silently (public access)
 
   try {
-    const decoded = jwt.verify(token, config.jwt_access_secret!) as { id: string };
+    const decoded = jwt.verify(token, config.jwt_access_secret!) as {
+      id: string;
+    };
     let user = await getCache(`user:${decoded.id}`);
     if (!user) {
       const userDoc = await User.findById(decoded.id).select("-password");
@@ -70,9 +61,8 @@ export const optionalAuth = async (req: AuthRequest, res: Response, next: NextFu
   next();
 };
 
-
 // role and category admin guard
-export const categoryAdminGuard = (req: AuthRequest,res: Response,next: NextFunction) => {
+export const categoryAdminGuard = ( req: AuthRequest, res: Response, next: NextFunction ) => {
   const user = req.user;
   if (!user) {
     throw new AppError(401, "Unauthorized");

@@ -160,21 +160,7 @@ exports.getAllIssues = (0, catchAsync_1.catchAsync)(async (req, res) => {
     }
     // Generate cache key with all filters
     const cacheKey = `issues:${user?._id || 'public'}:${user?.role || 'guest'}:${user?.category || 'all'}:${cursor || 'first'}:${limit}:${sortOrder}:${status || 'all'}:${division || 'all'}:${category || 'all'}:${search || 'none'}`;
-    // Try cache first
-    try {
-        const cachedData = await (0, redisCache_1.getCache)(cacheKey);
-        if (cachedData) {
-            console.log(`⚡ Cache hit: ${cacheKey}`);
-            return res.status(200).json({
-                success: true,
-                message: "Issues fetched (from cache)",
-                ...cachedData,
-            });
-        }
-    }
-    catch (cacheError) {
-        console.error("Cache retrieval error:", cacheError);
-    }
+    await (0, redisCache_1.getCache)(cacheKey);
     // Calculate cursor pagination
     const paginationOptions = (0, cursorPagination_1.calculateCursorPagination)({
         limit: parseInt(limit),

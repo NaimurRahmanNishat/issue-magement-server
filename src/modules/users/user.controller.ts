@@ -498,26 +498,11 @@ export const editProfileById = catchAsync(async (req: AuthRequest, res: Response
   });
 });
 
+
 // 9. Get User Profile by ID time complexity: O(1)
 export const getProfileById = catchAsync(async (req: AuthRequest, res: Response) => {
   const userId = req.user?._id;
   if (!userId) throw new AppError(401, "Unauthorized");
-
-  // Try cache first
-  const cacheKey = `user:${userId}`;
-  try {
-    const cached = await getCache(cacheKey);
-    if (cached) {
-      console.log(`⚡ Cache hit: ${cacheKey}`);
-      return res.status(200).json({
-        success: true,
-        message: "Profile fetched (from cache)",
-        data: cached,
-      });
-    }
-  } catch (cacheError) {
-    console.error("Cache retrieval error:", cacheError);
-  }
 
   const user = await User.findById(userId)
     .select("-password -refreshToken -refreshTokenExpiry -activationCode -activationCodeExpiry -resetPasswordOtp -resetPasswordOtpExpiry")

@@ -6,6 +6,7 @@ import { activateUserSchema, loginUserSchema, registerUserSchema } from "./user.
 import { validate } from "../../middleware/validate.middleware";
 import { authorizeRole, isAuthenticated, optionalAuth } from "../../middleware/auth.middleware";
 import { upload } from "../../middleware/multer";
+import { authLimiter } from "../../middleware/rateLimiter";
 
 
 const router = Router();
@@ -19,7 +20,7 @@ router.post("/register", validate(registerUserSchema), optionalAuth, register);
 router.post("/activate-user", validate(activateUserSchema), activateUser);
 
 // 3. Login
-router.post("/login", validate(loginUserSchema), login);
+router.post("/login", authLimiter, validate(loginUserSchema), login);
 
 // 4. Forgot password (send OTP)
 router.post("/forgot-password", forgetPassword);

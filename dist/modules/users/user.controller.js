@@ -453,22 +453,6 @@ exports.getProfileById = (0, catchAsync_1.catchAsync)(async (req, res) => {
     const userId = req.user?._id;
     if (!userId)
         throw new errorHandler_1.AppError(401, "Unauthorized");
-    // Try cache first
-    const cacheKey = `user:${userId}`;
-    try {
-        const cached = await (0, redisCache_1.getCache)(cacheKey);
-        if (cached) {
-            console.log(`⚡ Cache hit: ${cacheKey}`);
-            return res.status(200).json({
-                success: true,
-                message: "Profile fetched (from cache)",
-                data: cached,
-            });
-        }
-    }
-    catch (cacheError) {
-        console.error("Cache retrieval error:", cacheError);
-    }
     const user = await user_model_1.default.findById(userId)
         .select("-password -refreshToken -refreshTokenExpiry -activationCode -activationCodeExpiry -resetPasswordOtp -resetPasswordOtpExpiry")
         .lean();

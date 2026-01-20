@@ -17,17 +17,10 @@ const isAuthenticated = async (req, res, next) => {
     let decoded;
     try {
         decoded = jsonwebtoken_1.default.verify(token, config_1.default.jwt_access_secret);
-        // 1. try to get user from cache
-        let user = await (0, redisCache_1.getCache)(`user:${decoded.id}`);
-        if (!user) {
-            // 2. fallback to DB
-            const userDoc = await user_model_1.default.findById(decoded.id).select("-password");
-            if (!userDoc)
-                return next(new errorHandler_1.AppError(404, "User not found"));
-            user = userDoc.toObject();
-            // 3. store in cache for next time
-            await (0, redisCache_1.setCache)(`user:${decoded.id}`, user);
-        }
+        const userDoc = await user_model_1.default.findById(decoded.id).select("-password");
+        if (!userDoc)
+            return next(new errorHandler_1.AppError(404, "User not found"));
+        let user = userDoc.toObject();
         req.user = user;
         next();
     }

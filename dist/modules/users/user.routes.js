@@ -8,6 +8,7 @@ const user_validation_1 = require("./user.validation");
 const validate_middleware_1 = require("../../middleware/validate.middleware");
 const auth_middleware_1 = require("../../middleware/auth.middleware");
 const multer_1 = require("../../middleware/multer");
+const rateLimiter_1 = require("../../middleware/rateLimiter");
 const router = (0, express_1.Router)();
 // ==================== Public Routes ====================
 // 1. Register (public for regular users, authenticated for category-admin creation)
@@ -15,7 +16,7 @@ router.post("/register", (0, validate_middleware_1.validate)(user_validation_1.r
 // 2. Activate user account
 router.post("/activate-user", (0, validate_middleware_1.validate)(user_validation_1.activateUserSchema), user_controller_1.activateUser);
 // 3. Login
-router.post("/login", (0, validate_middleware_1.validate)(user_validation_1.loginUserSchema), user_controller_1.login);
+router.post("/login", rateLimiter_1.authLimiter, (0, validate_middleware_1.validate)(user_validation_1.loginUserSchema), user_controller_1.login);
 // 4. Forgot password (send OTP)
 router.post("/forgot-password", user_controller_1.forgetPassword);
 // 5. Reset password (verify OTP and set new password)
