@@ -166,18 +166,18 @@ export const getAllIssues = catchAsync(async (req: AuthRequest, res: Response) =
     ...query,
     ...paginationOptions.filter, 
   };
-
+  
   // Query database with pagination
   const issues = await Issue.find(finalQuery)
+    .populate({ path: "author", select: "name email avatar" })
+    .populate("approvedBy", "name email role avatar")
     .populate({ 
       path: "reviews", 
       populate: { 
         path: "author replies.author", 
         select: "name email avatar" 
-      } 
+      }  
     })
-    .populate("author", "name email avatar")
-    .populate("approvedBy", "name email role avatar")
     .sort({ [paginationOptions.sortBy]: paginationOptions.sortOrder === 'asc' ? 1 : -1 })
     .limit(paginationOptions.limit + 1) 
     .lean();

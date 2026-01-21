@@ -97,7 +97,7 @@ const userSchema = new mongoose.Schema<IUser>(
       url: {
         type: String,
         default:
-          "https://icons8.com/icons/set/user",
+          "https://cdn-icons-png.flaticon.com/512/149/149071.png",
       },
     },
     activationCode: { type: String, default: null, select: false },
